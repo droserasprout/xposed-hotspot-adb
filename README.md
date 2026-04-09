@@ -30,12 +30,6 @@ Grab the latest APK from [GitHub Actions](https://github.com/droserasprout/xpose
 
 On first use, Android prompts to trust a network matching your hotspot name. Renaming the hotspot will reset this trust. The MAC address is hardcoded because Android randomizes the hotspot MAC on each enable, which would reset trust every time.
 
-## Other solutions
-
-[Magisk-WiFiADB](https://github.com/mrh929/magisk-wifiadb) — a Magisk module that enables legacy `adb tcpip` on boot by setting system properties. Simpler setup (no Xposed needed, just Magisk), works on older Android versions, and enables ADB automatically on boot. However, it uses the old unencrypted ADB protocol (no TLS, no pairing required but also no authentication), has no Settings UI integration, and isn't hotspot-aware.
-
-This module uses Android's native Wireless Debugging (TLS-encrypted, with device pairing) and integrates into the Settings app, but requires an Xposed framework (LSPosed) and currently targets Android 15 only.
-
 ## Building from source
 
 Requires JDK 21 and Android SDK.
@@ -45,3 +39,13 @@ make build     # build debug APK
 make install   # install via Gradle
 make clean     # clean build artifacts
 ```
+
+## Other solutions
+
+[Magisk-WiFiADB](https://github.com/mrh929/magisk-wifiadb) — a Magisk module that enables legacy `adb tcpip` on boot by setting system properties. Simpler setup (no Xposed needed, just Magisk), works on older Android versions, and enables ADB automatically on boot. However, it uses the old unencrypted ADB protocol (no TLS, no pairing required but also no authentication), has no Settings UI integration, and isn't hotspot-aware.
+
+This module uses Android's native Wireless Debugging (TLS-encrypted, with device pairing) and integrates into the Settings app, but requires an Xposed framework (LSPosed) and currently targets Android 15 only.
+
+# License
+
+[GPL-3.0](LICENSE)
