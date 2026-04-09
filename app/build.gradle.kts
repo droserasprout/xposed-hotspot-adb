@@ -33,4 +33,5 @@ android {
 
 dependencies {
     compileOnly("de.robv.android.xposed:api:82")
+    compileOnly("androidx.preference:preference:1.2.1")
 }
