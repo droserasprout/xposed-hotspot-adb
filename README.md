@@ -1,43 +1,39 @@
 # Hotspot Wireless Debugging
 
-Xposed module that enables Android's Wireless Debugging (ADB over Wi-Fi) when the device is running a Wi-Fi Hotspot instead of being connected to a Wi-Fi network.
+Xposed module that allows Wireless Debugging (ADB over Wi-Fi) to work over Wi-Fi Hotspot on Android 15.
 
-Normally, Android requires an active Wi-Fi client connection to use Wireless Debugging. This module hooks the relevant framework and Settings app code so that:
-
-- The Wireless Debugging toggle works when hotspot is active
-- The Settings UI shows connection info (IP and port) for the hotspot interface
-- Devices connected to the hotspot can use `adb connect <ip>:<port>`
-- The connection stays alive as long as the hotspot is on
+Android 11+ only enables Wireless Debugging when the device is connected to a Wi-Fi network as a client. This module hooks the Settings app and system framework to bypass that restriction, so hotspot guests can connect via ADB.
 
 ## Requirements
 
-- Android 15 (API 35)
+- Android 15 (older versions not tested)
 - LSPosed or compatible Xposed framework
 
 ## Installation
 
-Download the latest debug APK from [GitHub Actions](https://github.com/droserasprout/xposed-hotspot-adb/actions) artifacts, or build it yourself:
+Grab the latest APK from [GitHub Actions](https://github.com/droserasprout/xposed-hotspot-adb/actions) artifacts, or [build from source](#building-from-source).
 
-1. Build the APK: `make build`
-2. Install: `make install`
-3. Enable the module in LSPosed for both scopes:
+1. Install the APK
+2. Enable the module in LSPosed for both scopes:
    - `com.android.settings`
    - `android` (System Framework)
-4. Reboot
+3. Reboot
 
 ## Usage
 
-1. Enable Wi-Fi Hotspot on your device
-2. Open Settings > Developer Options > Wireless Debugging
-3. Enable the toggle and pair your client device
-4. From a device connected to the hotspot:
+1. Enable Wi-Fi Hotspot
+2. Go to Settings > Developer Options > Wireless Debugging
+3. Enable the toggle, pair your client device
+4. From a hotspot guest:
 
 ```shell
 adb pair <ip>:<pairing_port>
 adb connect <ip>:<port>
 ```
 
-## Building
+On first use, Android prompts to trust a network called "HotspotAP" — this is a virtual identity for the hotspot interface. Fixed values are used because Android randomizes hotspot MAC on each enable, which would reset trust every time.
+
+## Building from source
 
 Requires JDK 21 and Android SDK.
 
