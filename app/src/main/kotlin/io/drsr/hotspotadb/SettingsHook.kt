@@ -1,4 +1,4 @@
-package io.drsr.hotspot_adb
+package io.drsr.hotspotadb
 
 import android.content.Context
 import android.database.ContentObserver
@@ -12,7 +12,6 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 object SettingsHook {
-
     private const val ADB_WIFI_ENABLED = "adb_wifi_enabled"
 
     fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -38,7 +37,7 @@ object SettingsHook {
                             }
                         }
                     }
-                }
+                },
             )
         } catch (e: Exception) {
             XposedBridge.log("HotspotAdb: failed to hook isWifiConnected: $e")
@@ -62,7 +61,7 @@ object SettingsHook {
                             }
                         }
                     }
-                }
+                },
             )
         } catch (e: Exception) {
             XposedBridge.log("HotspotAdb: failed to hook getIpv4Address: $e")
@@ -71,10 +70,11 @@ object SettingsHook {
 
     private fun hookWifiTetherSettings(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
-            val tetherSettingsClass = XposedHelpers.findClass(
-                "com.android.settings.wifi.tether.WifiTetherSettings",
-                lpparam.classLoader
-            )
+            val tetherSettingsClass =
+                XposedHelpers.findClass(
+                    "com.android.settings.wifi.tether.WifiTetherSettings",
+                    lpparam.classLoader,
+                )
 
             XposedHelpers.findAndHookMethod(
                 tetherSettingsClass,
@@ -87,26 +87,31 @@ object SettingsHook {
                             XposedBridge.log("HotspotAdb: failed to inject preference: $e")
                         }
                     }
-                }
+                },
             )
         } catch (e: Exception) {
             XposedBridge.log("HotspotAdb: failed to hook WifiTetherSettings: $e")
         }
     }
 
-    private fun injectWirelessDebuggingPref(fragment: Any, lpparam: XC_LoadPackage.LoadPackageParam) {
-        val screen = XposedHelpers.callMethod(fragment, "getPreferenceScreen") ?: run {
-            XposedBridge.log("HotspotAdb: preferenceScreen is null")
-            return
-        }
+    private fun injectWirelessDebuggingPref(
+        fragment: Any,
+        lpparam: XC_LoadPackage.LoadPackageParam,
+    ) {
+        val screen =
+            XposedHelpers.callMethod(fragment, "getPreferenceScreen") ?: run {
+                XposedBridge.log("HotspotAdb: preferenceScreen is null")
+                return
+            }
         if (XposedHelpers.callMethod(screen, "findPreference", "hotspot_adb_wireless_debugging") != null) return
         val context = XposedHelpers.callMethod(screen, "getContext") as Context
 
         // PrimarySwitchPreference — split toggle+button, same as Developer Options
-        val primarySwitchClass = XposedHelpers.findClass(
-            "com.android.settingslib.PrimarySwitchPreference",
-            lpparam.classLoader
-        )
+        val primarySwitchClass =
+            XposedHelpers.findClass(
+                "com.android.settingslib.PrimarySwitchPreference",
+                lpparam.classLoader,
+            )
         val pref = primarySwitchClass.getConstructor(Context::class.java).newInstance(context)
 
         XposedHelpers.callMethod(pref, "setKey", "hotspot_adb_wireless_debugging")
@@ -116,40 +121,44 @@ object SettingsHook {
         XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, enabled) as CharSequence)
 
         // Switch toggle listener
-        val changeListenerClass = XposedHelpers.findClass(
-            "androidx.preference.Preference\$OnPreferenceChangeListener",
-            lpparam.classLoader
-        )
-        val changeProxy = java.lang.reflect.Proxy.newProxyInstance(
-            lpparam.classLoader,
-            arrayOf(changeListenerClass)
-        ) { _, _, args ->
-            val newValue = args!![1] as Boolean
-            Settings.Global.putInt(context.contentResolver, ADB_WIFI_ENABLED, if (newValue) 1 else 0)
-            XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, newValue) as CharSequence)
-            true
-        }
+        val changeListenerClass =
+            XposedHelpers.findClass(
+                "androidx.preference.Preference\$OnPreferenceChangeListener",
+                lpparam.classLoader,
+            )
+        val changeProxy =
+            java.lang.reflect.Proxy.newProxyInstance(
+                lpparam.classLoader,
+                arrayOf(changeListenerClass),
+            ) { _, _, args ->
+                val newValue = args!![1] as Boolean
+                Settings.Global.putInt(context.contentResolver, ADB_WIFI_ENABLED, if (newValue) 1 else 0)
+                XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, newValue) as CharSequence)
+                true
+            }
         XposedHelpers.callMethod(pref, "setOnPreferenceChangeListener", changeProxy)
 
         // Click on the left side opens Wireless Debugging screen
-        val clickListenerClass = XposedHelpers.findClass(
-            "androidx.preference.Preference\$OnPreferenceClickListener",
-            lpparam.classLoader
-        )
-        val clickProxy = java.lang.reflect.Proxy.newProxyInstance(
-            lpparam.classLoader,
-            arrayOf(clickListenerClass)
-        ) { _, _, _ ->
-            try {
-                val subSettingsClass = XposedHelpers.findClass("com.android.settings.SubSettings", context.classLoader)
-                val intent = android.content.Intent(context, subSettingsClass)
-                intent.putExtra(":settings:show_fragment", "com.android.settings.development.WirelessDebuggingFragment")
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                XposedBridge.log("HotspotAdb: failed to open wireless debugging: $e")
+        val clickListenerClass =
+            XposedHelpers.findClass(
+                "androidx.preference.Preference\$OnPreferenceClickListener",
+                lpparam.classLoader,
+            )
+        val clickProxy =
+            java.lang.reflect.Proxy.newProxyInstance(
+                lpparam.classLoader,
+                arrayOf(clickListenerClass),
+            ) { _, _, _ ->
+                try {
+                    val subSettingsClass = XposedHelpers.findClass("com.android.settings.SubSettings", context.classLoader)
+                    val intent = android.content.Intent(context, subSettingsClass)
+                    intent.putExtra(":settings:show_fragment", "com.android.settings.development.WirelessDebuggingFragment")
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    XposedBridge.log("HotspotAdb: failed to open wireless debugging: $e")
+                }
+                true
             }
-            true
-        }
         XposedHelpers.callMethod(pref, "setOnPreferenceClickListener", clickProxy)
 
         XposedHelpers.callMethod(screen, "addPreference", pref)
@@ -160,12 +169,15 @@ object SettingsHook {
             uri,
             false,
             object : ContentObserver(Handler(Looper.getMainLooper())) {
-                override fun onChange(selfChange: Boolean, uri: Uri?) {
+                override fun onChange(
+                    selfChange: Boolean,
+                    uri: Uri?,
+                ) {
                     val on = isAdbWifiEnabled(context)
                     XposedHelpers.callMethod(pref, "setChecked", on)
                     XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, on) as CharSequence)
                 }
-            }
+            },
         )
 
         XposedBridge.log("HotspotAdb: added wireless debugging toggle to hotspot settings")
@@ -176,7 +188,10 @@ object SettingsHook {
     }
 
     @Suppress("UNUSED_PARAMETER")
-    private fun getWirelessDebuggingSummary(context: Context, enabled: Boolean): String {
+    private fun getWirelessDebuggingSummary(
+        context: Context,
+        enabled: Boolean,
+    ): String {
         if (!enabled) return ""
         val ip = HotspotHelper.getHotspotIpAddress(context) ?: return ""
         val port = getAdbWirelessPort()
@@ -186,12 +201,16 @@ object SettingsHook {
     private fun getAdbWirelessPort(): Int {
         return try {
             val serviceManagerClass = Class.forName("android.os.ServiceManager")
-            val binder = serviceManagerClass.getMethod("getService", String::class.java)
-                .invoke(null, "adb")
+            val binder =
+                serviceManagerClass.getMethod("getService", String::class.java)
+                    .invoke(null, "adb")
             val iAdbManagerStub = Class.forName("android.debug.IAdbManager\$Stub")
-            val adbService = iAdbManagerStub.getMethod("asInterface", android.os.IBinder::class.java)
-                .invoke(null, binder)
+            val adbService =
+                iAdbManagerStub.getMethod("asInterface", android.os.IBinder::class.java)
+                    .invoke(null, binder)
             adbService.javaClass.getMethod("getAdbWirelessPort").invoke(adbService) as Int
-        } catch (_: Throwable) { -1 }
+        } catch (_: Throwable) {
+            -1
+        }
     }
 }

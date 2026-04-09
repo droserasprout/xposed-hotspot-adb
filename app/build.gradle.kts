@@ -1,14 +1,20 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jlleitschuh.gradle.ktlint")
+    id("io.gitlab.arturbosch.detekt")
+}
+
+detekt {
+    config.setFrom("${rootProject.projectDir}/detekt.yml")
 }
 
 android {
-    namespace = "io.drsr.hotspot_adb"
+    namespace = "io.drsr.hotspotadb"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "io.drsr.hotspot_adb"
+        applicationId = "io.drsr.hotspotadb"
         minSdk = 35
         targetSdk = 35
         versionCode = 1

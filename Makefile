@@ -11,5 +11,8 @@ build:
 install:
 	./gradlew installDebug
 
+lint:
+	./gradlew ktlintCheck detekt
+
 clean:
 	./gradlew clean

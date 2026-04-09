@@ -1,0 +1,25 @@
+complexity:
+  CyclomaticComplexMethod:
+    threshold: 20
+  LongMethod:
+    threshold: 80
+  NestedBlockDepth:
+    threshold: 5
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false
+
+naming:
+  PackageNaming:
+    packagePattern: "[a-z]+(\\.[a-z][A-Za-z0-9_]*)*"
+
+style:
+  MagicNumber:
+    active: false
+  ReturnCount:
+    max: 5
+  LoopWithTooManyJumpStatements:
+    active: false
+  MaxLineLength:
+    maxLineLength: 140

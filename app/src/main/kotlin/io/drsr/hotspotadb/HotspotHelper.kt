@@ -1,4 +1,4 @@
-package io.drsr.hotspot_adb
+package io.drsr.hotspotadb
 
 import android.content.Context
 import android.net.wifi.WifiManager
@@ -7,7 +7,6 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 object HotspotHelper {
-
     private const val WIFI_AP_STATE_ENABLED = 13
 
     fun isHotspotActive(context: Context): Boolean {

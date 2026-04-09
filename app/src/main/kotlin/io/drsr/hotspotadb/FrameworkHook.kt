@@ -1,4 +1,4 @@
-package io.drsr.hotspot_adb
+package io.drsr.hotspotadb
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -10,7 +10,6 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 object FrameworkHook {
-
     fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookGetCurrentWifiApInfo(lpparam)
         hookBroadcastReceiver(lpparam)
@@ -18,10 +17,11 @@ object FrameworkHook {
 
     private fun hookGetCurrentWifiApInfo(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
-            val handlerClass = XposedHelpers.findClass(
-                "com.android.server.adb.AdbDebuggingManager\$AdbDebuggingHandler",
-                lpparam.classLoader
-            )
+            val handlerClass =
+                XposedHelpers.findClass(
+                    "com.android.server.adb.AdbDebuggingManager\$AdbDebuggingHandler",
+                    lpparam.classLoader,
+                )
 
             XposedHelpers.findAndHookMethod(
                 handlerClass,
@@ -34,29 +34,34 @@ object FrameworkHook {
                         if (!HotspotHelper.isHotspotActive(context)) return
 
                         try {
-                            val ssid = try {
-                                val wm = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                                val config = wm.javaClass.getMethod("getSoftApConfiguration").invoke(wm)
-                                val wifiSsid = config.javaClass.getMethod("getWifiSsid").invoke(config)
-                                wifiSsid?.toString() ?: "HotspotAP"
-                            } catch (_: Throwable) { "HotspotAP" }
+                            val ssid =
+                                try {
+                                    val wm = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                                    val config = wm.javaClass.getMethod("getSoftApConfiguration").invoke(wm)
+                                    val wifiSsid = config.javaClass.getMethod("getWifiSsid").invoke(config)
+                                    wifiSsid?.toString() ?: "HotspotAP"
+                                } catch (_: Throwable) {
+                                    "HotspotAP"
+                                }
 
-                            val connectionInfoClass = XposedHelpers.findClass(
-                                "com.android.server.adb.AdbDebuggingManager\$AdbConnectionInfo",
-                                lpparam.classLoader
-                            )
-                            val info = XposedHelpers.newInstance(
-                                connectionInfoClass,
-                                "02:00:00:00:00:00",
-                                ssid
-                            )
+                            val connectionInfoClass =
+                                XposedHelpers.findClass(
+                                    "com.android.server.adb.AdbDebuggingManager\$AdbConnectionInfo",
+                                    lpparam.classLoader,
+                                )
+                            val info =
+                                XposedHelpers.newInstance(
+                                    connectionInfoClass,
+                                    "02:00:00:00:00:00",
+                                    ssid,
+                                )
                             param.result = info
                             XposedBridge.log("HotspotAdb: getCurrentWifiApInfo -> synthetic (hotspot active)")
                         } catch (e: Exception) {
                             XposedBridge.log("HotspotAdb: failed to create AdbConnectionInfo: $e")
                         }
                     }
-                }
+                },
             )
         } catch (e: Exception) {
             XposedBridge.log("HotspotAdb: failed to hook getCurrentWifiApInfo: $e")
@@ -91,7 +96,7 @@ object FrameworkHook {
                                 }
                             }
                         }
-                    }
+                    },
                 )
                 found = true
                 XposedBridge.log("HotspotAdb: hooked BroadcastReceiver ${cls.name}")
@@ -126,8 +131,9 @@ object FrameworkHook {
                         if (key == "adb_wifi_enabled" && value == 0) {
                             try {
                                 val resolver = param.args[0] as android.content.ContentResolver
-                                val context = resolver.javaClass.getMethod("getContext")
-                                    .invoke(resolver) as? Context
+                                val context =
+                                    resolver.javaClass.getMethod("getContext")
+                                        .invoke(resolver) as? Context
                                 if (context != null && HotspotHelper.isHotspotActive(context)) {
                                     param.result = false
                                     XposedBridge.log("HotspotAdb: blocked ADB_WIFI_ENABLED=0 (hotspot active)")
@@ -136,7 +142,7 @@ object FrameworkHook {
                             }
                         }
                     }
-                }
+                },
             )
         } catch (e: Exception) {
             XposedBridge.log("HotspotAdb: failed to hook Settings.Global.putInt: $e")
