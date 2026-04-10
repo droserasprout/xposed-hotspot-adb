@@ -58,6 +58,7 @@ object HotspotHelper {
         return null
     }
 
+    @Suppress("DEPRECATION")
     private fun getStationWifiIp(context: Context): String? {
         return try {
             val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
