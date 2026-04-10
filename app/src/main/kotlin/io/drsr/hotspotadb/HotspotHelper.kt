@@ -30,6 +30,9 @@ object HotspotHelper {
         return getApInterfaceIp(excludeIp = stationIp)
     }
 
+    /** Returns any wlan/ap interface IP, optionally excluding one. */
+    fun getAnyWlanIp(excludeIp: String? = null): String? = getApInterfaceIp(excludeIp)
+
     private fun getApInterfaceIp(excludeIp: String? = null): String? {
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null

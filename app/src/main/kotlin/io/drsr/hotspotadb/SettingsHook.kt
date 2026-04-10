@@ -1,8 +1,12 @@
 package io.drsr.hotspotadb
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.database.ContentObserver
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -180,6 +184,41 @@ object SettingsHook {
             XposedHelpers.setAdditionalInstanceField(fragment, observerTag, observer)
         }
 
+        // Also watch hotspot state changes (on/off) to update the label
+        val receiverTag = "hotspot_adb_receiver"
+        if (XposedHelpers.getAdditionalInstanceField(fragment, receiverTag) == null) {
+            val handler = Handler(Looper.getMainLooper())
+            val updatePref =
+                Runnable {
+                    val on = isAdbWifiEnabled(context)
+                    XposedHelpers.callMethod(pref, "setChecked", on)
+                    XposedHelpers.callMethod(
+                        pref,
+                        "setSummary",
+                        getWirelessDebuggingSummary(context, on) as CharSequence,
+                    )
+                }
+            val receiver =
+                object : BroadcastReceiver() {
+                    override fun onReceive(
+                        ctx: Context,
+                        intent: Intent,
+                    ) {
+                        // Run immediately and again after a delay — the hotspot interface
+                        // IP may not be available yet when the AP state changes.
+                        updatePref.run()
+                        handler.postDelayed(updatePref, 1000)
+                    }
+                }
+            context.registerReceiver(
+                receiver,
+                IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION).apply {
+                    addAction("android.net.wifi.WIFI_AP_STATE_CHANGED")
+                },
+            )
+            XposedHelpers.setAdditionalInstanceField(fragment, receiverTag, receiver)
+        }
+
         XposedBridge.log("HotspotAdb: added wireless debugging toggle to hotspot settings")
     }
 
@@ -192,7 +231,10 @@ object SettingsHook {
         enabled: Boolean,
     ): String {
         if (!enabled) return ""
-        val ip = HotspotHelper.getHotspotIpAddress(context) ?: return ""
+        val ip =
+            HotspotHelper.getHotspotIpAddress(context)
+                ?: HotspotHelper.getAnyWlanIp()
+                ?: return ""
         val port = getAdbWirelessPort()
         return if (port > 0) "$ip:$port" else ip
     }
