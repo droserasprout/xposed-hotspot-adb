@@ -16,7 +16,7 @@ on:
         default: ""
 
 concurrency:
-  group: release
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -65,7 +65,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           if git tag --list "$VERSION" | grep -q .; then
-            echo "::error::Tag $VERSION already exists. Choose a different version or delete the existing tag."
+            echo "::error::Tag $VERSION already exists. If this is a rerun of a partially failed release, delete the tag first: git push origin :$VERSION"
             exit 1
           fi
 
@@ -173,6 +173,10 @@ jobs:
 
       # ── 9. Publish to Xposed-Modules-Repo (optional) ─────────────────────
       # Skipped when XPOSED_REPO_TOKEN is not configured.
+      - name: Log Xposed-Modules-Repo publish status
+        if: ${{ secrets.XPOSED_REPO_TOKEN == '' }}
+        run: echo "Skipping Xposed-Modules-Repo publish -- XPOSED_REPO_TOKEN is not configured."
+
       - name: Publish to Xposed-Modules-Repo
         if: ${{ secrets.XPOSED_REPO_TOKEN != '' }}
         uses: softprops/action-gh-release@v2

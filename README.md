@@ -13,7 +13,7 @@ Android 11+ only enables Wireless Debugging when the device is connected to Wi-F
 
 ## Installation
 
-Grab the latest APK from [GitHub Actions](https://github.com/droserasprout/io.drsr.hotspotadb/actions) artifacts, or [build from source](#building-from-source).
+Grab the latest signed APK from [GitHub Releases](https://github.com/cbkii/hotspotadb/releases), or [build from source](#building-from-source).
 
 1. Install the APK
 2. Enable the module in LSPosed for both scopes:
