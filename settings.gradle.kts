@@ -11,7 +11,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven("https://api.xposed.info/")
+        // Note: legacy https://api.xposed.info/ Maven repo removed — modern libxposed is on Maven Central
     }
 }
 

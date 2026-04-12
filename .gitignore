@@ -8,7 +8,11 @@
 /captures
 .externalNativeBuild
 .cxx
+<<<<<<< HEAD
 /secrets
 *secrets.txt
 *.fix
 *.patch
+=======
+ktlint
+>>>>>>> origin/main

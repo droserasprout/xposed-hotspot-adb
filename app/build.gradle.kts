@@ -11,14 +11,16 @@ detekt {
 
 android {
     namespace = "io.drsr.hotspotadb"
-    compileSdk = 35
+    // API 36 = Android 16
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.drsr.hotspotadb"
+        // minSdk stays at 35 (Android 15): the module targets Android 15+ only
         minSdk = 35
-        targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        targetSdk = 36
+        versionCode = 4
+        versionName = "2.1.0"
     }
 
     signingConfigs {
@@ -45,9 +47,18 @@ android {
     kotlinOptions {
         jvmTarget = "21"
     }
+
+    // Merge META-INF/xposed/* from src/main/resources into the APK.
+    // Modern libxposed modules use these files instead of assets/xposed_init and manifest metadata.
+    packaging {
+        resources {
+            merges += "META-INF/xposed/*"
+        }
+    }
 }
 
 dependencies {
-    compileOnly("de.robv.android.xposed:api:82")
+    // Modern libxposed API 101 — replaces legacy de.robv.android.xposed:api:82
+    compileOnly("io.github.libxposed:api:101.0.1")
     compileOnly("androidx.preference:preference:1.2.1")
 }
