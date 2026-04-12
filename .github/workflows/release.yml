@@ -4,13 +4,20 @@ name: Release
 # Use the branch selector to choose the source ref (default: main).
 # Leave "version" blank to auto-bump the patch component.
 #
-# Required secrets: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
-# Optional secret:  XPOSED_REPO_TOKEN  (publish to Xposed-Modules-Repo; skipped when absent)
+# Required secrets (repository-level — Settings > Secrets and variables > Actions):
+#   KEYSTORE_BASE64    base64-encoded release keystore (encode with: base64 -w 0 release.keystore)
+#   KEYSTORE_PASSWORD  keystore store password
+#   KEY_ALIAS          signing key alias
+#   KEY_PASSWORD       signing key password
+# Optional secret:
+#   XPOSED_REPO_TOKEN  publish to Xposed-Modules-Repo; skipped when absent
 #
-# Step order rationale: secrets are validated and the APK is built BEFORE any
-# git commit or tag is created.  This ensures that a failed keystore decode or
-# build failure never leaves an orphaned "Release X.Y.Z" commit or tag without
-# a corresponding published APK.
+# Step order rationale:
+#   1. Secrets are decoded and validated with keytool BEFORE the expensive
+#      Android SDK / Gradle toolchain setup, so bad credentials fail fast.
+#   2. The APK is built and validated BEFORE any git commit or tag is created,
+#      so a failed build or signing step never leaves an orphaned release commit
+#      or tag that would block reruns.
 
 on:
   workflow_dispatch:
@@ -43,6 +50,11 @@ jobs:
           CURRENT_CODE=$(grep 'versionCode = ' app/build.gradle.kts \
             | sed 's/.*versionCode = \([0-9]*\).*/\1/')
 
+          if [ -z "$CURRENT_VERSION" ] || [ -z "$CURRENT_CODE" ]; then
+            echo "::error::Could not parse versionName or versionCode from app/build.gradle.kts"
+            exit 1
+          fi
+
           INPUT_VERSION="${{ inputs.version }}"
 
           if [ -z "$INPUT_VERSION" ]; then
@@ -66,36 +78,73 @@ jobs:
           echo "Resolved: $CURRENT_VERSION -> $VERSION  (versionCode: $CURRENT_CODE -> $NEW_CODE)"
 
       # ── 2. Guard against duplicate releases ───────────────────────────────
+      # Non-fatal: if the tag already exists (e.g. a rerun after the commit/tag
+      # step succeeded but the GitHub Release step failed), the build still runs
+      # and the release is (re)published.  The git commit/tag step is skipped.
       - name: Check for existing tag
+        id: tag_check
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           if git tag --list "$VERSION" | grep -q .; then
-            echo "::error::Tag $VERSION already exists. If this is a rerun of a partially failed release, delete the tag first: git push origin :$VERSION"
-            exit 1
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Tag $VERSION already exists — the commit/tag step will be skipped. Build and release publication will still run to complete a previously interrupted release."
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $VERSION does not yet exist — proceeding normally."
           fi
 
       # ── 3. Fail early for missing or invalid signing secrets ───────────────
-      # Done before toolchain setup so failures are fast and cheap.
+      # These are repository-level secrets (no environment: key on this job).
+      # Configure them under: Settings > Secrets and variables > Actions.
       - name: Validate signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          echo "Secret scope: repository-level secrets (no environment: attached to this job)"
           MISSING=""
-          [ -z "${{ secrets.KEYSTORE_BASE64 }}"   ] && MISSING="$MISSING KEYSTORE_BASE64"
-          [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ] && MISSING="$MISSING KEYSTORE_PASSWORD"
-          [ -z "${{ secrets.KEY_ALIAS }}"          ] && MISSING="$MISSING KEY_ALIAS"
-          [ -z "${{ secrets.KEY_PASSWORD }}"       ] && MISSING="$MISSING KEY_PASSWORD"
+          [ -z "$KEYSTORE_BASE64"   ] && MISSING="$MISSING KEYSTORE_BASE64"
+          [ -z "$KEYSTORE_PASSWORD" ] && MISSING="$MISSING KEYSTORE_PASSWORD"
+          [ -z "$KEY_ALIAS"          ] && MISSING="$MISSING KEY_ALIAS"
+          [ -z "$KEY_PASSWORD"       ] && MISSING="$MISSING KEY_PASSWORD"
           if [ -n "$MISSING" ]; then
-            echo "::error::Missing required signing secrets:$MISSING"
+            echo "::error::Missing required repository secrets:$MISSING"
+            echo "::error::Configure them under: Settings > Secrets and variables > Actions"
             exit 1
           fi
           # Validate KEYSTORE_BASE64 is decodable (strip whitespace first to handle
           # line-wrapped or Windows-encoded secrets).
-          if ! printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" \
+          if ! printf '%s' "$KEYSTORE_BASE64" \
                | tr -d '[:space:]' | base64 -d > /dev/null 2>&1; then
             echo "::error::KEYSTORE_BASE64 is not valid base64. Re-encode with: base64 -w 0 release.keystore"
             exit 1
           fi
 
-      # ── 4. Set up build toolchain ─────────────────────────────────────────
+      # ── 4. Decode keystore and validate credentials ───────────────────────
+      # Decode and keytool-validate BEFORE the expensive Android SDK / Gradle
+      # setup so bad keystore content or wrong credentials fail fast.
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > /tmp/release.keystore
+          echo "Keystore decoded to /tmp/release.keystore ($(wc -c < /tmp/release.keystore) bytes)"
+
+      - name: Validate keystore credentials
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          keytool -list \
+            -keystore /tmp/release.keystore \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            -noprompt
+          echo "Keystore credentials validated: alias is present and accessible."
+
+      # ── 5. Set up build toolchain ─────────────────────────────────────────
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -104,12 +153,6 @@ jobs:
       - uses: android-actions/setup-android@v3
 
       - uses: gradle/actions/setup-gradle@v4
-
-      # ── 5. Decode keystore ────────────────────────────────────────────────
-      # strip whitespace before decoding to handle line-wrapped or Windows
-      # (\r\n) encoded secrets.
-      - name: Decode keystore
-        run: printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '[:space:]' | base64 -d > /tmp/release.keystore
 
       # ── 6. Update version metadata (local — not committed yet) ────────────
       # Files updated: app/build.gradle.kts, CHANGELOG.md
@@ -153,7 +196,12 @@ jobs:
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md | sed '/[^[:space:]]/,$!d' | sed 's/[[:space:]]*$//')
-          [ -z "$(printf '%s' "$CHANGES" | tr -d '[:space:]')" ] && CHANGES="Release $VERSION."
+          if [ -z "$(printf '%s' "$CHANGES" | tr -d '[:space:]')" ]; then
+            CHANGES="Release $VERSION."
+            echo "Release notes: no changelog section found for $VERSION — using fallback text"
+          else
+            echo "Release notes: extracted from CHANGELOG.md section for $VERSION"
+          fi
           {
             echo "changes<<RELEASE_NOTES_EOF"
             printf '%s\n' "$CHANGES"
@@ -172,7 +220,11 @@ jobs:
       # ── 9. Validate release APK module packaging ──────────────────────────
       - name: Validate module packaging
         run: |
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          APK=$(ls app/build/outputs/apk/release/*.apk 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK found at app/build/outputs/apk/release/ — build may have failed silently."
+            exit 1
+          fi
           echo "Validating module packaging: $APK"
           if unzip -p "$APK" META-INF/xposed/module.prop > /dev/null 2>&1; then
             echo "Detected: libxposed module (META-INF/xposed present)"
@@ -210,7 +262,10 @@ jobs:
       # ── 10. Commit metadata changes and create tag ────────────────────────
       # Only reached after a successful build and validation — no orphaned
       # commits or tags if the build or signing fails.
+      # Skipped on rerun if the tag was already created in a previous attempt
+      # (the build will still run and the release step will republish the APK).
       - name: Commit and tag
+        if: steps.tag_check.outputs.tag_exists != 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -227,6 +282,7 @@ jobs:
           name: ${{ steps.version.outputs.version }}
           body: ${{ steps.notes.outputs.changes }}
           files: app/build/outputs/apk/release/*.apk
+          fail_on_unmatched_files: true
 
       # ── 12. Publish to Xposed-Modules-Repo (optional) ────────────────────
       # Skipped when XPOSED_REPO_TOKEN is not configured.
