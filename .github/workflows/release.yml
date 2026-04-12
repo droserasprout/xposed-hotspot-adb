@@ -1,8 +1,23 @@
 name: Release
 
+# Trigger: manual run from the GitHub web UI.
+# Use the branch selector to choose the source ref (default: main).
+# Leave "version" blank to auto-bump the patch component.
+#
+# Required secrets: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
+# Optional secret:  XPOSED_REPO_TOKEN  (publish to Xposed-Modules-Repo; skipped when absent)
+
 on:
-  push:
-    tags: ["*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.2.3). Leave blank to auto-bump patch."
+        required: false
+        default: ""
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -11,7 +26,122 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      # ── 1. Resolve the release version ────────────────────────────────────
+      - name: Resolve version
+        id: version
+        run: |
+          CURRENT_VERSION=$(grep 'versionName = ' app/build.gradle.kts \
+            | sed 's/.*versionName = "\(.*\)".*/\1/')
+          CURRENT_CODE=$(grep 'versionCode = ' app/build.gradle.kts \
+            | sed 's/.*versionCode = \([0-9]*\).*/\1/')
+
+          INPUT_VERSION="${{ inputs.version }}"
+
+          if [ -z "$INPUT_VERSION" ]; then
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+            PATCH=$((PATCH + 1))
+            VERSION="$MAJOR.$MINOR.$PATCH"
+          else
+            if ! echo "$INPUT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::Invalid version '$INPUT_VERSION'. Expected MAJOR.MINOR.PATCH (e.g. 1.2.3)"
+              exit 1
+            fi
+            VERSION="$INPUT_VERSION"
+          fi
+
+          NEW_CODE=$((CURRENT_CODE + 1))
+
+          echo "version=$VERSION"           >> "$GITHUB_OUTPUT"
+          echo "version_code=$NEW_CODE"     >> "$GITHUB_OUTPUT"
+          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "current_code=$CURRENT_CODE" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $CURRENT_VERSION -> $VERSION  (versionCode: $CURRENT_CODE -> $NEW_CODE)"
+
+      # ── 2. Guard against duplicate releases ───────────────────────────────
+      - name: Check for existing tag
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if git tag --list "$VERSION" | grep -q .; then
+            echo "::error::Tag $VERSION already exists. Choose a different version or delete the existing tag."
+            exit 1
+          fi
+
+      # ── 3. Fail early for missing signing secrets ──────────────────────────
+      - name: Validate signing secrets
+        run: |
+          MISSING=""
+          [ -z "${{ secrets.KEYSTORE_BASE64 }}"   ] && MISSING="$MISSING KEYSTORE_BASE64"
+          [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ] && MISSING="$MISSING KEYSTORE_PASSWORD"
+          [ -z "${{ secrets.KEY_ALIAS }}"          ] && MISSING="$MISSING KEY_ALIAS"
+          [ -z "${{ secrets.KEY_PASSWORD }}"       ] && MISSING="$MISSING KEY_PASSWORD"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required signing secrets:$MISSING"
+            exit 1
+          fi
+
+      # ── 4. Update version metadata ────────────────────────────────────────
+      # Files updated: app/build.gradle.kts, CHANGELOG.md
+      - name: Update version metadata
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          NEW_CODE="${{ steps.version.outputs.version_code }}"
+          CURRENT_VERSION="${{ steps.version.outputs.current_version }}"
+          CURRENT_CODE="${{ steps.version.outputs.current_code }}"
+
+          sed -i "s/versionCode = $CURRENT_CODE/versionCode = $NEW_CODE/" app/build.gradle.kts
+          sed -i "s/versionName = \"$CURRENT_VERSION\"/versionName = \"$VERSION\"/" app/build.gradle.kts
+
+          if ! grep -qF "## [$VERSION]" CHANGELOG.md; then
+            TODAY=$(date -u +%Y-%m-%d)
+            FIRST_LINE=$(grep -n '^## \[' CHANGELOG.md | head -1 | cut -d: -f1)
+            if [ -n "$FIRST_LINE" ]; then
+              {
+                head -n $((FIRST_LINE - 1)) CHANGELOG.md
+                echo "## [$VERSION] - $TODAY"
+                echo ""
+                echo "### Changed"
+                echo ""
+                echo "- Release $VERSION."
+                echo ""
+                tail -n +"$FIRST_LINE" CHANGELOG.md
+              } > /tmp/changelog.tmp && mv /tmp/changelog.tmp CHANGELOG.md
+            else
+              printf '\n## [%s] - %s\n\n### Changed\n\n- Release %s.\n' \
+                "$VERSION" "$TODAY" "$VERSION" >> CHANGELOG.md
+            fi
+          fi
+
+      # ── 5. Extract release notes from CHANGELOG.md ────────────────────────
+      - name: Extract release notes
+        id: notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          CHANGES=$(awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md | sed '/[^[:space:]]/,$!d' | sed 's/[[:space:]]*$//')
+          [ -z "$(printf '%s' "$CHANGES" | tr -d '[:space:]')" ] && CHANGES="Release $VERSION."
+          {
+            echo "changes<<RELEASE_NOTES_EOF"
+            printf '%s\n' "$CHANGES"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── 6. Commit metadata changes and create tag ─────────────────────────
+      - name: Commit and tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/build.gradle.kts CHANGELOG.md
+          git commit -m "Release ${{ steps.version.outputs.version }}"
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin HEAD:"${{ github.ref_name }}" "${{ steps.version.outputs.version }}"
+
+      # ── 7. Build signed release APK ───────────────────────────────────────
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -32,25 +162,24 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Parse changelog
-        id: changelog
-        uses: mindsers/changelog-reader-action@v2
-        with:
-          version: ${{ github.ref_name }}
-
-      - name: Create GitHub release
+      # ── 8. Publish GitHub Release in this repository ──────────────────────
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.changes }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          body: ${{ steps.notes.outputs.changes }}
           files: app/build/outputs/apk/release/*.apk
 
+      # ── 9. Publish to Xposed-Modules-Repo (optional) ─────────────────────
+      # Skipped when XPOSED_REPO_TOKEN is not configured.
       - name: Publish to Xposed-Modules-Repo
+        if: ${{ secrets.XPOSED_REPO_TOKEN != '' }}
         uses: softprops/action-gh-release@v2
         with:
           repository: Xposed-Modules-Repo/io.drsr.hotspotadb
           token: ${{ secrets.XPOSED_REPO_TOKEN }}
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.changes }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          body: ${{ steps.notes.outputs.changes }}
           files: app/build/outputs/apk/release/*.apk

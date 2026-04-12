@@ -17,6 +17,7 @@ on:
       - "gradle.properties"
       - "gradle/**"
       - ".github/workflows/**"
+  workflow_dispatch:
 
 jobs:
   lint:
