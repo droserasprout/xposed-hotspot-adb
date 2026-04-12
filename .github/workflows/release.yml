@@ -162,7 +162,45 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      # ── 8. Publish GitHub Release in this repository ──────────────────────
+      # ── 8. Validate release APK module packaging ─────────────────────────
+      - name: Validate module packaging
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "Validating module packaging: $APK"
+          if unzip -p "$APK" META-INF/xposed/module.prop > /dev/null 2>&1; then
+            echo "Detected: libxposed module (META-INF/xposed present)"
+            for F in META-INF/xposed/java_init.list META-INF/xposed/scope.list META-INF/xposed/module.prop; do
+              unzip -p "$APK" "$F" > /dev/null 2>&1 \
+                || { echo "::error::Missing from APK: $F"; exit 1; }
+              echo "  OK: $F"
+            done
+            unzip -p "$APK" META-INF/xposed/java_init.list \
+              | grep -qF "io.drsr.hotspotadb.HotspotAdbModule" \
+              || { echo "::error::java_init.list: expected io.drsr.hotspotadb.HotspotAdbModule"; exit 1; }
+            echo "  OK: java_init.list -> io.drsr.hotspotadb.HotspotAdbModule"
+            for SCOPE in com.android.settings android; do
+              unzip -p "$APK" META-INF/xposed/scope.list | grep -qF "$SCOPE" \
+                || { echo "::error::scope.list: missing scope $SCOPE"; exit 1; }
+              echo "  OK: scope.list contains $SCOPE"
+            done
+            for PROP in "minApiVersion=101" "targetApiVersion=101" "staticScope=true"; do
+              unzip -p "$APK" META-INF/xposed/module.prop | grep -qF "$PROP" \
+                || { echo "::error::module.prop: missing $PROP"; exit 1; }
+              echo "  OK: module.prop has $PROP"
+            done
+          elif unzip -p "$APK" assets/xposed_init > /dev/null 2>&1; then
+            echo "Detected: legacy Xposed module (assets/xposed_init present)"
+            unzip -p "$APK" assets/xposed_init \
+              | grep -qF "io.drsr.hotspotadb.HotspotAdbModule" \
+              || { echo "::error::xposed_init: expected io.drsr.hotspotadb.HotspotAdbModule"; exit 1; }
+            echo "  OK: xposed_init -> io.drsr.hotspotadb.HotspotAdbModule"
+          else
+            echo "::error::APK contains neither META-INF/xposed/module.prop nor assets/xposed_init. Module packaging is broken."
+            exit 1
+          fi
+          echo "Module packaging validation passed."
+
+      # ── 9. Publish GitHub Release in this repository ──────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -171,7 +209,7 @@ jobs:
           body: ${{ steps.notes.outputs.changes }}
           files: app/build/outputs/apk/release/*.apk
 
-      # ── 9. Publish to Xposed-Modules-Repo (optional) ─────────────────────
+      # ── 10. Publish to Xposed-Modules-Repo (optional) ────────────────────
       # Skipped when XPOSED_REPO_TOKEN is not configured.
       - name: Log Xposed-Modules-Repo publish status
         if: ${{ secrets.XPOSED_REPO_TOKEN == '' }}
