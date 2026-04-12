@@ -60,9 +60,14 @@ The module has two hook domains:
 ### `android` scope (system_server)
 - `AdbDebuggingHandler.getCurrentWifiApInfo()` — synthesises an `AdbConnectionInfo` when
   hotspot is active but no station Wi-Fi is present
-- ADB Wi-Fi network monitor / `BroadcastReceiver.onReceive()` — suppresses
-  `WIFI_STATE_CHANGED` and `NETWORK_STATE_CHANGED` events that would otherwise cause the
-  ADB daemon to tear down wireless debugging when the device is not a Wi-Fi client
+- `AdbWifiNetworkMonitor.onLost()` / `onCapabilitiesChanged()` (Android 16 primary path) —
+  suppresses framework-driven `NetworkCallback` events that would disable wireless debugging
+  when the device is no longer a Wi-Fi client
+- `AdbBroadcastReceiver.onReceive()` (Android 16 secondary path) — suppresses
+  `WIFI_STATE_CHANGED` / `NETWORK_STATE_CHANGED` broadcasts on the path active when
+  `allowAdbWifiReconnect` is disabled
+- Anonymous inner `BroadcastReceiver.onReceive()` scan (Android 15 fallback) — same broadcast
+  suppression for Android 15 which uses anonymous inner classes
 
 ### Android 16 compatibility
 

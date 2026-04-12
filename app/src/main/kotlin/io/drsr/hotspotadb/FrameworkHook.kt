@@ -46,7 +46,6 @@ import java.lang.reflect.Constructor
  *   Fallback: com.android.server.adb.AdbDebuggingManager$AdbConnectionInfo (Android 15 nested)
  */
 object FrameworkHook {
-
     // Stable synthetic BSSID.  ADB uses BSSID as part of the trusted-network fingerprint.
     // Fixed value prevents trust from resetting every time hotspot is re-enabled
     // (Android randomises the real hotspot MAC on each enable cycle).
@@ -55,28 +54,36 @@ object FrameworkHook {
     // Resolved once at install time; null if no suitable constructor was found.
     private var connectionInfoCtor: Constructor<*>? = null
 
-    fun install(classLoader: ClassLoader, module: XposedModule) {
+    fun install(
+        classLoader: ClassLoader,
+        module: XposedModule,
+    ) {
         hookGetCurrentWifiApInfo(classLoader, module)
         hookNetworkMonitors(classLoader, module)
     }
 
     // ---- getCurrentWifiApInfo ----
 
-    private fun hookGetCurrentWifiApInfo(classLoader: ClassLoader, module: XposedModule) {
-        val handlerClass = tryFindClass(
-            "com.android.server.adb.AdbDebuggingManager\$AdbDebuggingHandler",
-            classLoader,
-        ) ?: run {
-            module.log(Log.WARN, TAG, "AdbDebuggingHandler not found; getCurrentWifiApInfo hook skipped")
-            return
-        }
+    private fun hookGetCurrentWifiApInfo(
+        classLoader: ClassLoader,
+        module: XposedModule,
+    ) {
+        val handlerClass =
+            tryFindClass(
+                "com.android.server.adb.AdbDebuggingManager\$AdbDebuggingHandler",
+                classLoader,
+            ) ?: run {
+                module.log(Log.WARN, TAG, "AdbDebuggingHandler not found; getCurrentWifiApInfo hook skipped")
+                return
+            }
 
-        val method = try {
-            handlerClass.getDeclaredMethod("getCurrentWifiApInfo").also { it.isAccessible = true }
-        } catch (e: NoSuchMethodException) {
-            module.log(Log.WARN, TAG, "getCurrentWifiApInfo not found in AdbDebuggingHandler: $e")
-            return
-        }
+        val method =
+            try {
+                handlerClass.getDeclaredMethod("getCurrentWifiApInfo").also { it.isAccessible = true }
+            } catch (e: NoSuchMethodException) {
+                module.log(Log.WARN, TAG, "getCurrentWifiApInfo not found in AdbDebuggingHandler: $e")
+                return
+            }
 
         connectionInfoCtor = resolveConnectionInfoCtor(classLoader, module)
 
@@ -91,10 +98,11 @@ object FrameworkHook {
             val context = getContext(chain.getThisObject()) ?: return@intercept null
             if (!HotspotHelper.isHotspotActive(context)) return@intercept null
 
-            val ctor = connectionInfoCtor ?: run {
-                module.log(Log.WARN, TAG, "AdbConnectionInfo ctor not resolved; cannot synthesise AP info")
-                return@intercept null
-            }
+            val ctor =
+                connectionInfoCtor ?: run {
+                    module.log(Log.WARN, TAG, "AdbConnectionInfo ctor not resolved; cannot synthesise AP info")
+                    return@intercept null
+                }
 
             val ssid = getHotspotSsid(context)
             try {
@@ -116,15 +124,20 @@ object FrameworkHook {
      *   package-private (String, String) constructor.
      * Android 15: com.android.server.adb.AdbDebuggingManager$AdbConnectionInfo — nested class.
      */
-    private fun resolveConnectionInfoCtor(classLoader: ClassLoader, module: XposedModule): Constructor<*>? {
-        val candidates = listOf(
-            "com.android.server.adb.AdbConnectionInfo",
-            "com.android.server.adb.AdbDebuggingManager\$AdbConnectionInfo",
-        )
+    private fun resolveConnectionInfoCtor(
+        classLoader: ClassLoader,
+        module: XposedModule,
+    ): Constructor<*>? {
+        val candidates =
+            listOf(
+                "com.android.server.adb.AdbConnectionInfo",
+                "com.android.server.adb.AdbDebuggingManager\$AdbConnectionInfo",
+            )
         for (name in candidates) {
             val clazz = tryFindClass(name, classLoader) ?: continue
             return try {
-                clazz.getDeclaredConstructor(String::class.java, String::class.java)
+                clazz
+                    .getDeclaredConstructor(String::class.java, String::class.java)
                     .also {
                         it.isAccessible = true
                         module.log(Log.INFO, TAG, "resolved AdbConnectionInfo ctor: $name")
@@ -155,7 +168,10 @@ object FrameworkHook {
      * No Settings.Global.putInt fallback: that intercept is too broad and would block
      * user-initiated disables (Developer Options toggle, hotspot settings toggle).
      */
-    private fun hookNetworkMonitors(classLoader: ClassLoader, module: XposedModule) {
+    private fun hookNetworkMonitors(
+        classLoader: ClassLoader,
+        module: XposedModule,
+    ) {
         var anyHookInstalled = false
 
         // Path A: AdbWifiNetworkMonitor — ConnectivityManager.NetworkCallback (Android 16 default).
@@ -223,16 +239,21 @@ object FrameworkHook {
      *
      * Android 16 QPR2 AOSP: com.android.server.adb.AdbWifiNetworkMonitor confirmed.
      */
-    private fun hookAdbWifiNetworkMonitor(classLoader: ClassLoader, module: XposedModule): Boolean {
-        val clazz = tryFindClass("com.android.server.adb.AdbWifiNetworkMonitor", classLoader) ?: run {
-            module.log(Log.DEBUG, TAG, "AdbWifiNetworkMonitor not found (Android < 16?)")
-            return false
-        }
+    private fun hookAdbWifiNetworkMonitor(
+        classLoader: ClassLoader,
+        module: XposedModule,
+    ): Boolean {
+        val clazz =
+            tryFindClass("com.android.server.adb.AdbWifiNetworkMonitor", classLoader) ?: run {
+                module.log(Log.DEBUG, TAG, "AdbWifiNetworkMonitor not found (Android < 16?)")
+                return false
+            }
 
-        val networkClass = tryFindClass("android.net.Network", classLoader) ?: run {
-            module.log(Log.WARN, TAG, "android.net.Network not found; cannot hook AdbWifiNetworkMonitor")
-            return false
-        }
+        val networkClass =
+            tryFindClass("android.net.Network", classLoader) ?: run {
+                module.log(Log.WARN, TAG, "android.net.Network not found; cannot hook AdbWifiNetworkMonitor")
+                return false
+            }
         val networkCapabilitiesClass = tryFindClass("android.net.NetworkCapabilities", classLoader)
 
         module.log(Log.INFO, TAG, "found AdbWifiNetworkMonitor; installing Android 16 NetworkCallback hooks")
@@ -265,11 +286,13 @@ object FrameworkHook {
         // change, e.g. when the Wi-Fi network loses connectivity or internet access.
         if (networkCapabilitiesClass != null) {
             try {
-                val onCaps = clazz.getDeclaredMethod(
-                    "onCapabilitiesChanged",
-                    networkClass,
-                    networkCapabilitiesClass,
-                ).also { it.isAccessible = true }
+                val onCaps =
+                    clazz
+                        .getDeclaredMethod(
+                            "onCapabilitiesChanged",
+                            networkClass,
+                            networkCapabilitiesClass,
+                        ).also { it.isAccessible = true }
                 module.deoptimize(onCaps)
                 module.hook(onCaps).intercept { chain ->
                     val ctx = getContextFromMonitor(chain.getThisObject())
@@ -292,18 +315,26 @@ object FrameworkHook {
         return installed
     }
 
-    private fun hookOnReceive(clazz: Class<*>, module: XposedModule, label: String): Boolean {
+    private fun hookOnReceive(
+        clazz: Class<*>,
+        module: XposedModule,
+        label: String,
+    ): Boolean {
         return try {
-            val onReceive = clazz.getDeclaredMethod("onReceive", Context::class.java, Intent::class.java)
-                .also { it.isAccessible = true }
+            val onReceive =
+                clazz
+                    .getDeclaredMethod("onReceive", Context::class.java, Intent::class.java)
+                    .also { it.isAccessible = true }
 
             module.hook(onReceive).intercept { chain ->
                 val context = chain.getArg(0) as? Context ?: return@intercept chain.proceed()
                 val intent = chain.getArg(1) as? Intent ?: return@intercept chain.proceed()
                 val action = intent.action ?: return@intercept chain.proceed()
 
-                if ((action == WifiManager.WIFI_STATE_CHANGED_ACTION ||
-                            action == WifiManager.NETWORK_STATE_CHANGED_ACTION) &&
+                if ((
+                        action == WifiManager.WIFI_STATE_CHANGED_ACTION ||
+                            action == WifiManager.NETWORK_STATE_CHANGED_ACTION
+                    ) &&
                     HotspotHelper.isHotspotActive(context)
                 ) {
                     module.log(Log.INFO, TAG, "suppressed broadcast $action via $label (hotspot active)")
@@ -333,9 +364,10 @@ object FrameworkHook {
     private fun getContext(handler: Any?): Context? {
         handler ?: return null
         return try {
-            val outer = getFieldValue(handler, "this\$0")
-                ?: findFieldByTypeName(handler, "com.android.server.adb.AdbDebuggingManager")
-                ?: handler
+            val outer =
+                getFieldValue(handler, "this\$0")
+                    ?: findFieldByTypeName(handler, "com.android.server.adb.AdbDebuggingManager")
+                    ?: handler
             (getFieldValue(outer, "mContext") as? Context)
                 ?: (getFieldValue(handler, "mContext") as? Context)
         } catch (e: Exception) {
@@ -355,9 +387,10 @@ object FrameworkHook {
         return try {
             (getFieldValue(monitor, "mContext") as? Context)
                 ?: run {
-                    val manager = getFieldValue(monitor, "mAdbDebuggingManager")
-                        ?: findFieldByTypeName(monitor, "com.android.server.adb.AdbDebuggingManager")
-                        ?: getFieldValue(monitor, "this\$0")
+                    val manager =
+                        getFieldValue(monitor, "mAdbDebuggingManager")
+                            ?: findFieldByTypeName(monitor, "com.android.server.adb.AdbDebuggingManager")
+                            ?: getFieldValue(monitor, "this\$0")
                     manager?.let { getFieldValue(it, "mContext") as? Context }
                 }
         } catch (e: Exception) {
@@ -366,8 +399,8 @@ object FrameworkHook {
         }
     }
 
-    private fun getHotspotSsid(context: Context): String {
-        return try {
+    private fun getHotspotSsid(context: Context): String =
+        try {
             val wm = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
             val config = wm.javaClass.getMethod("getSoftApConfiguration").invoke(wm)
             val wifiSsid = config.javaClass.getMethod("getWifiSsid").invoke(config)
@@ -375,19 +408,23 @@ object FrameworkHook {
         } catch (_: Throwable) {
             "HotspotAP"
         }
-    }
 
     // ---- Reflection utilities ----
 
-    private fun tryFindClass(name: String, classLoader: ClassLoader): Class<*>? {
-        return try {
+    private fun tryFindClass(
+        name: String,
+        classLoader: ClassLoader,
+    ): Class<*>? =
+        try {
             Class.forName(name, false, classLoader)
         } catch (_: ClassNotFoundException) {
             null
         }
-    }
 
-    private fun getFieldValue(obj: Any, name: String): Any? {
+    private fun getFieldValue(
+        obj: Any,
+        name: String,
+    ): Any? {
         var cls: Class<*>? = obj.javaClass
         while (cls != null && cls != Any::class.java) {
             try {
@@ -401,7 +438,10 @@ object FrameworkHook {
         return null
     }
 
-    private fun findFieldByTypeName(obj: Any, typeName: String): Any? {
+    private fun findFieldByTypeName(
+        obj: Any,
+        typeName: String,
+    ): Any? {
         var cls: Class<*>? = obj.javaClass
         while (cls != null && cls != Any::class.java) {
             for (field in cls.declaredFields) {

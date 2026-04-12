@@ -16,7 +16,6 @@ import io.github.libxposed.api.XposedModuleInterface.SystemServerStartingParam
  *                        install Settings UI hooks for com.android.settings.
  */
 class HotspotAdbModule : XposedModule() {
-
     companion object {
         const val TAG = "HotspotAdb"
     }

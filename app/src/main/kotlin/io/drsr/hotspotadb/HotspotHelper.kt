@@ -10,8 +10,8 @@ object HotspotHelper {
     private const val TAG = HotspotAdbModule.TAG
     private const val WIFI_AP_STATE_ENABLED = 13
 
-    fun isHotspotActive(context: Context): Boolean {
-        return try {
+    fun isHotspotActive(context: Context): Boolean =
+        try {
             val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
             val method = wifiManager.javaClass.getMethod("getWifiApState")
             val state = method.invoke(wifiManager) as Int
@@ -20,7 +20,6 @@ object HotspotHelper {
             Log.w(TAG, "HotspotAdb: failed to check hotspot state: $e")
             false
         }
-    }
 
     /**
      * Returns the IP address of the hotspot (AP) interface.
