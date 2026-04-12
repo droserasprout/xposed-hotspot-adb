@@ -81,6 +81,13 @@ jobs:
             echo "::error::Missing required signing secrets:$MISSING"
             exit 1
           fi
+          # Validate KEYSTORE_BASE64 is decodable (strip whitespace first to handle
+          # line-wrapped or Windows-encoded secrets)
+          if ! printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" \
+               | tr -d '[:space:]' | base64 -d > /dev/null 2>&1; then
+            echo "::error::KEYSTORE_BASE64 is not valid base64. Re-encode with: base64 -w 0 release.keystore"
+            exit 1
+          fi
 
       # ── 4. Update version metadata ────────────────────────────────────────
       # Files updated: app/build.gradle.kts, CHANGELOG.md
@@ -152,7 +159,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Decode keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > /tmp/release.keystore
+        run: printf '%s' "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '[:space:]' | base64 -d > /tmp/release.keystore
 
       - name: Build release APK
         run: ./gradlew --no-daemon assembleRelease
