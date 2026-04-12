@@ -127,10 +127,8 @@ object SettingsHook {
         val pref = primarySwitchClass.getConstructor(Context::class.java).newInstance(context)
 
         XposedHelpers.callMethod(pref, "setKey", "hotspot_adb_wireless_debugging")
-        XposedHelpers.callMethod(pref, "setTitle", "Wireless debugging" as CharSequence)
-        val enabled = isAdbWifiEnabled(context)
-        XposedHelpers.callMethod(pref, "setChecked", enabled)
-        XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, enabled) as CharSequence)
+        XposedHelpers.callMethod(pref, "setTitle", "Wireless debugging")
+        updatePrefState(context, pref)
 
         // Switch toggle listener
         val changeListenerClass =
@@ -145,7 +143,7 @@ object SettingsHook {
             ) { _, _, args ->
                 val newValue = args!![1] as Boolean
                 Settings.Global.putInt(context.contentResolver, ADB_WIFI_ENABLED, if (newValue) 1 else 0)
-                XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, newValue) as CharSequence)
+                updatePrefState(context, pref)
                 true
             }
         XposedHelpers.callMethod(pref, "setOnPreferenceChangeListener", changeProxy)
@@ -194,9 +192,7 @@ object SettingsHook {
                         selfChange: Boolean,
                         uri: Uri?,
                     ) {
-                        val on = isAdbWifiEnabled(context)
-                        XposedHelpers.callMethod(pref, "setChecked", on)
-                        XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, on) as CharSequence)
+                        updatePrefState(context, pref)
                     }
                 }
             context.contentResolver.registerContentObserver(uri, false, observer)
@@ -207,16 +203,7 @@ object SettingsHook {
         val receiverTag = "hotspot_adb_receiver"
         if (XposedHelpers.getAdditionalInstanceField(fragment, receiverTag) == null) {
             val handler = Handler(Looper.getMainLooper())
-            val updatePref =
-                Runnable {
-                    val on = isAdbWifiEnabled(context)
-                    XposedHelpers.callMethod(pref, "setChecked", on)
-                    XposedHelpers.callMethod(
-                        pref,
-                        "setSummary",
-                        getWirelessDebuggingSummary(context, on) as CharSequence,
-                    )
-                }
+            val updatePref = Runnable { updatePrefState(context, pref) }
             val receiver =
                 object : BroadcastReceiver() {
                     override fun onReceive(
@@ -239,6 +226,15 @@ object SettingsHook {
         }
 
         XposedBridge.log("HotspotAdb: added wireless debugging toggle to hotspot settings")
+    }
+
+    private fun updatePrefState(
+        context: Context,
+        pref: Any,
+    ) {
+        val on = isAdbWifiEnabled(context)
+        XposedHelpers.callMethod(pref, "setChecked", on)
+        XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, on))
     }
 
     private fun isAdbWifiEnabled(context: Context): Boolean {
