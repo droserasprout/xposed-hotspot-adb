@@ -1,306 +1,273 @@
-name: Release
-
-# Trigger: manual run from the GitHub web UI.
-# Use the branch selector to choose the source ref (default: main).
-# Leave "version" blank to auto-bump the patch component.
-#
-# Required secrets (repository-level — Settings > Secrets and variables > Actions):
-#   KEYSTORE_BASE64    base64-encoded release keystore (encode with: base64 -w 0 release.keystore)
-#   KEYSTORE_PASSWORD  keystore store password
-#   KEY_ALIAS          signing key alias
-#   KEY_PASSWORD       signing key password
-# Optional secret:
-#   XPOSED_REPO_TOKEN  publish to Xposed-Modules-Repo; skipped when absent
-#
-# Step order rationale:
-#   1. Secrets are decoded and validated with keytool BEFORE the expensive
-#      Android SDK / Gradle toolchain setup, so bad credentials fail fast.
-#   2. The APK is built and validated BEFORE any git commit or tag is created,
-#      so a failed build or signing step never leaves an orphaned release commit
-#      or tag that would block reruns.
+name: Release APK
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Release version (e.g. 1.2.3). Leave blank to auto-bump patch."
+      tag:
+        description: "Git tag / GitHub Release tag to create. Leave blank to use versionName from app/build.gradle.kts."
         required: false
         default: ""
+      name:
+        description: "GitHub Release title. Leave blank to use the resolved tag."
+        required: false
+        default: ""
+      draft:
+        description: "Create as draft release"
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: "Mark as prerelease"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   release:
+    name: Build and publish signed APK
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ── 1. Resolve the release version ────────────────────────────────────
-      - name: Resolve version
-        id: version
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
         run: |
-          CURRENT_VERSION=$(grep 'versionName = ' app/build.gradle.kts \
-            | sed 's/.*versionName = "\(.*\)".*/\1/')
-          CURRENT_CODE=$(grep 'versionCode = ' app/build.gradle.kts \
-            | sed 's/.*versionCode = \([0-9]*\).*/\1/')
+          set -euo pipefail
 
-          if [ -z "$CURRENT_VERSION" ] || [ -z "$CURRENT_CODE" ]; then
-            echo "::error::Could not parse versionName or versionCode from app/build.gradle.kts"
-            exit 1
-          fi
+          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -n 1)"
 
-          INPUT_VERSION="${{ inputs.version }}"
+          [ -n "$VERSION_NAME" ] || { echo "::error::Could not parse versionName from app/build.gradle.kts"; exit 1; }
+          [ -n "$VERSION_CODE" ] || { echo "::error::Could not parse versionCode from app/build.gradle.kts"; exit 1; }
 
-          if [ -z "$INPUT_VERSION" ]; then
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-            PATCH=$((PATCH + 1))
-            VERSION="$MAJOR.$MINOR.$PATCH"
+          INPUT_TAG='${{ inputs.tag }}'
+          INPUT_NAME='${{ inputs.name }}'
+
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
           else
-            if ! echo "$INPUT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-              echo "::error::Invalid version '$INPUT_VERSION'. Expected MAJOR.MINOR.PATCH (e.g. 1.2.3)"
-              exit 1
-            fi
-            VERSION="$INPUT_VERSION"
+            TAG="$VERSION_NAME"
           fi
 
-          NEW_CODE=$((CURRENT_CODE + 1))
-
-          echo "version=$VERSION"           >> "$GITHUB_OUTPUT"
-          echo "version_code=$NEW_CODE"     >> "$GITHUB_OUTPUT"
-          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
-          echo "current_code=$CURRENT_CODE" >> "$GITHUB_OUTPUT"
-          echo "Resolved: $CURRENT_VERSION -> $VERSION  (versionCode: $CURRENT_CODE -> $NEW_CODE)"
-
-      # ── 2. Guard against duplicate releases ───────────────────────────────
-      # Non-fatal: if the tag already exists (e.g. a rerun after the commit/tag
-      # step succeeded but the GitHub Release step failed), the build still runs
-      # and the release is (re)published.  The git commit/tag step is skipped.
-      - name: Check for existing tag
-        id: tag_check
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          if git tag --list "$VERSION" | grep -q .; then
-            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Tag $VERSION already exists — the commit/tag step will be skipped. Build and release publication will still run to complete a previously interrupted release."
+          if [ -n "$INPUT_NAME" ]; then
+            RELEASE_NAME="$INPUT_NAME"
           else
-            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
-            echo "Tag $VERSION does not yet exist — proceeding normally."
+            RELEASE_NAME="$TAG"
           fi
 
-      # ── 3. Fail early for missing or invalid signing secrets ───────────────
-      # These are repository-level secrets (no environment: key on this job).
-      # Configure them under: Settings > Secrets and variables > Actions.
+          APK_BASENAME="hotspotadb-${TAG}.apk"
+          SHA256_NAME="${APK_BASENAME}.sha256"
+
+          {
+            echo "version_name=$VERSION_NAME"
+            echo "version_code=$VERSION_CODE"
+            echo "tag=$TAG"
+            echo "release_name=$RELEASE_NAME"
+            echo "apk_basename=$APK_BASENAME"
+            echo "sha256_name=$SHA256_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Resolved versionName: $VERSION_NAME"
+          echo "Resolved versionCode: $VERSION_CODE"
+          echo "Release tag: $TAG"
+          echo "Release title: $RELEASE_NAME"
+
       - name: Validate signing secrets
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "Secret scope: repository-level secrets (no environment: attached to this job)"
-          MISSING=""
-          [ -z "$KEYSTORE_BASE64"   ] && MISSING="$MISSING KEYSTORE_BASE64"
-          [ -z "$KEYSTORE_PASSWORD" ] && MISSING="$MISSING KEYSTORE_PASSWORD"
-          [ -z "$KEY_ALIAS"          ] && MISSING="$MISSING KEY_ALIAS"
-          [ -z "$KEY_PASSWORD"       ] && MISSING="$MISSING KEY_PASSWORD"
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required repository secrets:$MISSING"
-            echo "::error::Configure them under: Settings > Secrets and variables > Actions"
-            exit 1
-          fi
-          # Validate KEYSTORE_BASE64 is decodable (strip whitespace first to handle
-          # line-wrapped or Windows-encoded secrets).
-          if ! printf '%s' "$KEYSTORE_BASE64" \
-               | tr -d '[:space:]' | base64 -d > /dev/null 2>&1; then
-            echo "::error::KEYSTORE_BASE64 is not valid base64. Re-encode with: base64 -w 0 release.keystore"
+          set -euo pipefail
+
+          MISSING=()
+          [ -n "$KEYSTORE_BASE64" ] || MISSING+=(KEYSTORE_BASE64)
+          [ -n "$KEYSTORE_PASSWORD" ] || MISSING+=(KEYSTORE_PASSWORD)
+          [ -n "$KEY_ALIAS" ] || MISSING+=(KEY_ALIAS)
+          [ -n "$KEY_PASSWORD" ] || MISSING+=(KEY_PASSWORD)
+
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            printf '::error::Missing required repository secrets: %s\n' "${MISSING[*]}"
+            echo "::error::Set them in Settings -> Secrets and variables -> Actions."
             exit 1
           fi
 
-      # ── 4. Decode keystore and validate credentials ───────────────────────
-      # Java is set up first so that keytool comes from the known Temurin
-      # distribution rather than whatever is preinstalled on the runner image.
-      # Android SDK / Gradle setup is deferred until step 5 to keep the
-      # expensive SDK download after the fast credential validation.
-      - uses: actions/setup-java@v4
+          if ! printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > /dev/null 2>&1; then
+            echo "::error::KEYSTORE_BASE64 is not valid base64. Regenerate with: base64 -w 0 release.keystore"
+            exit 1
+          fi
+
+          echo "Signing secrets are present and KEYSTORE_BASE64 is decodable."
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: "21"
 
-      - name: Decode keystore
+      - name: Decode and validate keystore
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          umask 077
-          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > /tmp/release.keystore
-          chmod 600 /tmp/release.keystore
-          echo "Keystore decoded to /tmp/release.keystore ($(wc -c < /tmp/release.keystore) bytes)"
-
-      - name: Validate keystore credentials
-        env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
+          set -euo pipefail
+          umask 077
+
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > /tmp/release.keystore
+          chmod 600 /tmp/release.keystore
+
           keytool -list \
             -keystore /tmp/release.keystore \
             -storepass "$KEYSTORE_PASSWORD" \
             -alias "$KEY_ALIAS" \
-            -noprompt
-          echo "Keystore credentials validated: alias is present and accessible."
+            -noprompt > /dev/null
 
-      # ── 5. Set up remaining build toolchain ───────────────────────────────
-      - uses: android-actions/setup-android@v3
+          echo "Decoded and validated /tmp/release.keystore"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      # ── 6. Update version metadata (local — not committed yet) ────────────
-      # Files updated: app/build.gradle.kts, CHANGELOG.md
-      - name: Update version metadata
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          NEW_CODE="${{ steps.version.outputs.version_code }}"
-          CURRENT_VERSION="${{ steps.version.outputs.current_version }}"
-          CURRENT_CODE="${{ steps.version.outputs.current_code }}"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-          sed -i "s/versionCode = $CURRENT_CODE/versionCode = $NEW_CODE/" app/build.gradle.kts
-          sed -i "s/versionName = \"$CURRENT_VERSION\"/versionName = \"$VERSION\"/" app/build.gradle.kts
-
-          if ! grep -qF "## [$VERSION]" CHANGELOG.md; then
-            TODAY=$(date -u +%Y-%m-%d)
-            FIRST_LINE=$(grep -n '^## \[' CHANGELOG.md | head -1 | cut -d: -f1)
-            if [ -n "$FIRST_LINE" ]; then
-              {
-                head -n $((FIRST_LINE - 1)) CHANGELOG.md
-                echo "## [$VERSION] - $TODAY"
-                echo ""
-                echo "### Changed"
-                echo ""
-                echo "- Release $VERSION."
-                echo ""
-                tail -n +"$FIRST_LINE" CHANGELOG.md
-              } > /tmp/changelog.tmp && mv /tmp/changelog.tmp CHANGELOG.md
-            else
-              printf '\n## [%s] - %s\n\n### Changed\n\n- Release %s.\n' \
-                "$VERSION" "$TODAY" "$VERSION" >> CHANGELOG.md
-            fi
-          fi
-
-      # ── 7. Extract release notes from CHANGELOG.md ────────────────────────
-      - name: Extract release notes
-        id: notes
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          CHANGES=$(awk -v v="$VERSION" '
-            index($0, "## [" v "]") == 1 { found=1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md | sed '/[^[:space:]]/,$!d' | sed 's/[[:space:]]*$//')
-          if [ -z "$(printf '%s' "$CHANGES" | tr -d '[:space:]')" ]; then
-            CHANGES="Release $VERSION."
-            echo "Release notes: no changelog section found for $VERSION — using fallback text"
-          else
-            echo "Release notes: extracted from CHANGELOG.md section for $VERSION"
-          fi
-          {
-            echo "changes<<RELEASE_NOTES_EOF"
-            printf '%s\n' "$CHANGES"
-            echo "RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      # ── 8. Build signed release APK ───────────────────────────────────────
-      - name: Build release APK
-        run: ./gradlew --no-daemon assembleRelease
+      - name: Build signed release APK
+        shell: bash
         env:
           KEYSTORE_PATH: /tmp/release.keystore
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-
-      # ── 9. Validate release APK module packaging ──────────────────────────
-      - name: Validate module packaging
         run: |
-          APK=$(ls app/build/outputs/apk/release/*.apk 2>/dev/null | head -1)
-          if [ -z "$APK" ]; then
-            echo "::error::No APK found at app/build/outputs/apk/release/ — build may have failed silently."
-            exit 1
-          fi
-          echo "Validating module packaging: $APK"
-          if unzip -p "$APK" META-INF/xposed/module.prop > /dev/null 2>&1; then
-            echo "Detected: libxposed module (META-INF/xposed present)"
-            for F in META-INF/xposed/java_init.list META-INF/xposed/scope.list META-INF/xposed/module.prop; do
-              unzip -p "$APK" "$F" > /dev/null 2>&1 \
-                || { echo "::error::Missing from APK: $F"; exit 1; }
-              echo "  OK: $F"
+          set -euo pipefail
+          ./gradlew --no-daemon clean assembleRelease
+
+      - name: Inspect and validate built APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_PATH="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | sort | head -n 1)"
+          [ -n "$APK_PATH" ] || { echo "::error::No release APK found under app/build/outputs/apk/release"; exit 1; }
+
+          echo "Built APK: $APK_PATH"
+
+          if unzip -p "$APK_PATH" META-INF/xposed/module.prop > /dev/null 2>&1; then
+            echo "Detected modern libxposed packaging"
+            for f in META-INF/xposed/java_init.list META-INF/xposed/scope.list META-INF/xposed/module.prop; do
+              unzip -p "$APK_PATH" "$f" > /dev/null 2>&1 || {
+                echo "::error::Missing packaged module file: $f"
+                exit 1
+              }
             done
-            unzip -p "$APK" META-INF/xposed/java_init.list \
-              | grep -qF "io.drsr.hotspotadb.HotspotAdbModule" \
-              || { echo "::error::java_init.list: expected io.drsr.hotspotadb.HotspotAdbModule"; exit 1; }
-            echo "  OK: java_init.list -> io.drsr.hotspotadb.HotspotAdbModule"
-            for SCOPE in com.android.settings android; do
-              unzip -p "$APK" META-INF/xposed/scope.list | grep -qF "$SCOPE" \
-                || { echo "::error::scope.list: missing scope $SCOPE"; exit 1; }
-              echo "  OK: scope.list contains $SCOPE"
+            unzip -p "$APK_PATH" META-INF/xposed/java_init.list | grep -qx 'io.drsr.hotspotadb.HotspotAdbModule' || {
+              echo "::error::java_init.list does not contain io.drsr.hotspotadb.HotspotAdbModule"
+              exit 1
+            }
+            for scope in com.android.settings android; do
+              unzip -p "$APK_PATH" META-INF/xposed/scope.list | grep -qx "$scope" || {
+                echo "::error::scope.list missing scope: $scope"
+                exit 1
+              }
             done
-            for PROP in "minApiVersion=101" "targetApiVersion=101" "staticScope=true"; do
-              unzip -p "$APK" META-INF/xposed/module.prop | grep -qF "$PROP" \
-                || { echo "::error::module.prop: missing $PROP"; exit 1; }
-              echo "  OK: module.prop has $PROP"
+            for prop in 'minApiVersion=101' 'targetApiVersion=101' 'staticScope=true'; do
+              unzip -p "$APK_PATH" META-INF/xposed/module.prop | grep -qx "$prop" || {
+                echo "::error::module.prop missing: $prop"
+                exit 1
+              }
             done
-          elif unzip -p "$APK" assets/xposed_init > /dev/null 2>&1; then
-            echo "Detected: legacy Xposed module (assets/xposed_init present)"
-            unzip -p "$APK" assets/xposed_init \
-              | grep -qF "io.drsr.hotspotadb.HotspotAdbModule" \
-              || { echo "::error::xposed_init: expected io.drsr.hotspotadb.HotspotAdbModule"; exit 1; }
-            echo "  OK: xposed_init -> io.drsr.hotspotadb.HotspotAdbModule"
+          elif unzip -p "$APK_PATH" assets/xposed_init > /dev/null 2>&1; then
+            echo "Detected legacy Xposed packaging"
+            unzip -p "$APK_PATH" assets/xposed_init | grep -qx 'io.drsr.hotspotadb.HotspotAdbModule' || {
+              echo "::error::assets/xposed_init does not contain io.drsr.hotspotadb.HotspotAdbModule"
+              exit 1
+            }
           else
-            echo "::error::APK contains neither META-INF/xposed/module.prop nor assets/xposed_init. Module packaging is broken."
+            echo "::error::APK contains neither modern libxposed metadata nor legacy xposed_init"
             exit 1
           fi
-          echo "Module packaging validation passed."
 
-      # ── 10. Commit metadata changes and create tag ────────────────────────
-      # Only reached after a successful build and validation — no orphaned
-      # commits or tags if the build or signing fails.
-      # Skipped on rerun if the tag was already created in a previous attempt
-      # (the build will still run and the release step will republish the APK).
-      - name: Commit and tag
-        if: steps.tag_check.outputs.tag_exists != 'true'
+          cp "$APK_PATH" "${{ steps.meta.outputs.apk_basename }}"
+          sha256sum "${{ steps.meta.outputs.apk_basename }}" > "${{ steps.meta.outputs.sha256_name }}"
+
+          {
+            echo "apk_path=$APK_PATH"
+            echo "release_apk=${{ steps.meta.outputs.apk_basename }}"
+            echo "release_sha256=${{ steps.meta.outputs.sha256_name }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        id: notes
+        shell: bash
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add app/build.gradle.kts CHANGELOG.md
-          git commit -m "Release ${{ steps.version.outputs.version }}"
-          git tag "${{ steps.version.outputs.version }}"
-          git push origin HEAD:"${{ github.ref_name }}" "${{ steps.version.outputs.version }}"
+          set -euo pipefail
 
-      # ── 11. Publish GitHub Release in this repository ─────────────────────
-      - name: Create GitHub Release
+          VERSION_NAME='${{ steps.meta.outputs.version_name }}'
+          NOTES_FILE=/tmp/release-notes.md
+
+          awk -v v="$VERSION_NAME" '
+            index($0, "## [" v "]") == 1 { found=1; print; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$NOTES_FILE"
+
+          if ! grep -q '[^[:space:]]' "$NOTES_FILE"; then
+            cat > "$NOTES_FILE" <<EOF
+          Release ${{ steps.meta.outputs.release_name }}
+
+          Built from commit ${{ github.sha }}.
+          EOF
+          fi
+
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artifacts to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-${{ steps.meta.outputs.tag }}
+          path: |
+            ${{ steps.apk.outputs.release_apk }}
+            ${{ steps.apk.outputs.release_sha256 }}
+          if-no-files-found: error
+
+      - name: Create or update git tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.meta.outputs.tag }}'
+
+          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+            echo "Tag $TAG already exists; leaving it unchanged."
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+            echo "Created and pushed tag $TAG"
+          fi
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: ${{ steps.version.outputs.version }}
-          body: ${{ steps.notes.outputs.changes }}
-          files: app/build/outputs/apk/release/*.apk
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.release_name }}
+          body_path: ${{ steps.notes.outputs.notes_file }}
+          files: |
+            ${{ steps.apk.outputs.release_apk }}
+            ${{ steps.apk.outputs.release_sha256 }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
           fail_on_unmatched_files: true
-
-      # ── 12. Publish to Xposed-Modules-Repo (optional) ────────────────────
-      # Skipped when XPOSED_REPO_TOKEN is not configured.
-      #- name: Log Xposed-Modules-Repo publish status
-      #  if: ${{ secrets.XPOSED_REPO_TOKEN == '' }}
-      #  run: echo "Skipping Xposed-Modules-Repo publish -- XPOSED_REPO_TOKEN is not configured."
-
-      #- name: Publish to Xposed-Modules-Repo
-      #  if: ${{ secrets.XPOSED_REPO_TOKEN != '' }}
-      #  uses: softprops/action-gh-release@v2
-      #  with:
-      #    repository: Xposed-Modules-Repo/io.drsr.hotspotadb
-      #    token: ${{ secrets.XPOSED_REPO_TOKEN }}
-      #    tag_name: ${{ steps.version.outputs.version }}
-      #    name: ${{ steps.version.outputs.version }}
-      #    body: ${{ steps.notes.outputs.changes }}
-      #    files: app/build/outputs/apk/release/*.apk
