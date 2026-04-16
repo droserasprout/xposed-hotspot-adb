@@ -354,6 +354,24 @@ object SettingsHook {
             }
         XposedHelpers.callMethod(pref, "setOnPreferenceChangeListener", changeProxy)
 
+        // Place the toggle right after the IP/Port row. On Android 15 that row has no
+        // key (it's the first preference on the screen); on Android 16+ it's
+        // "adb_ip_addr_pref". Resolve by key when possible, else default to index 0.
+        val count = XposedHelpers.callMethod(screen, "getPreferenceCount") as Int
+        var targetIndex = 0
+        for (i in 0 until count) {
+            val p = XposedHelpers.callMethod(screen, "getPreference", i)
+            if (XposedHelpers.callMethod(p, "getKey") as? String == "adb_ip_addr_pref") {
+                targetIndex = i
+                break
+            }
+        }
+        for (i in 0 until count) {
+            val p = XposedHelpers.callMethod(screen, "getPreference", i)
+            val newOrder = if (i <= targetIndex) i else i + 1
+            XposedHelpers.callMethod(p, "setOrder", newOrder)
+        }
+        XposedHelpers.callMethod(pref, "setOrder", targetIndex + 1)
         XposedHelpers.callMethod(screen, "addPreference", pref)
         XposedBridge.log("HotspotAdb: added Fixed IP/port toggle to Wireless Debugging")
     }
