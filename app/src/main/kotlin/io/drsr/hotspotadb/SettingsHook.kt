@@ -16,12 +16,64 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 object SettingsHook {
+    private const val TAG_WTS_OBSERVER = "hotspot_adb_observer"
+    private const val TAG_WTS_RECEIVER = "hotspot_adb_receiver"
+    private const val TAG_WD_OBSERVER = "hotspot_adb_fixed_visibility"
+
     fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
         hookIsWifiConnected(lpparam)
         hookGetIpv4Address(lpparam)
         hookGetAdbWirelessPort(lpparam)
         hookWifiTetherSettings(lpparam)
         hookWirelessDebuggingFragment(lpparam)
+        hookFragmentCleanup(lpparam)
+    }
+
+    private fun hookFragmentCleanup(lpparam: XC_LoadPackage.LoadPackageParam) {
+        // Unregister observers/receivers we attached in injection hooks. Both target
+        // fragments extend DashboardFragment so one hook covers them.
+        try {
+            XposedHelpers.findAndHookMethod(
+                "com.android.settings.dashboard.DashboardFragment",
+                lpparam.classLoader,
+                "onDestroyView",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        cleanupFragment(param.thisObject)
+                    }
+                },
+            )
+        } catch (e: Exception) {
+            XposedBridge.log("HotspotAdb: failed to hook DashboardFragment.onDestroyView: $e")
+        }
+    }
+
+    private fun cleanupFragment(fragment: Any) {
+        val context =
+            XposedHelpers.callMethod(fragment, "getContext") as? Context ?: return
+        val resolver = context.contentResolver
+        for (tag in listOf(TAG_WTS_OBSERVER, TAG_WD_OBSERVER)) {
+            val observer =
+                XposedHelpers.getAdditionalInstanceField(fragment, tag) as? ContentObserver
+                    ?: continue
+            try {
+                resolver.unregisterContentObserver(observer)
+            } catch (e: Throwable) {
+                XposedBridge.log("HotspotAdb: unregister $tag failed: $e")
+            }
+            XposedHelpers.removeAdditionalInstanceField(fragment, tag)
+        }
+        val receiver =
+            XposedHelpers.getAdditionalInstanceField(fragment, TAG_WTS_RECEIVER)
+                as? BroadcastReceiver
+        if (receiver != null) {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (e: Throwable) {
+                XposedBridge.log("HotspotAdb: unregister $TAG_WTS_RECEIVER failed: $e")
+            }
+            XposedHelpers.removeAdditionalInstanceField(fragment, TAG_WTS_RECEIVER)
+        }
     }
 
     private fun hookIsWifiConnected(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -221,9 +273,8 @@ object SettingsHook {
 
         XposedHelpers.callMethod(screen, "addPreference", pref)
 
-        // Sync state from Developer Options; observer stored on the fragment to avoid leaks
-        val observerTag = "hotspot_adb_observer"
-        if (XposedHelpers.getAdditionalInstanceField(fragment, observerTag) == null) {
+        // Sync state from Developer Options; observer stored on the fragment for later cleanup
+        if (XposedHelpers.getAdditionalInstanceField(fragment, TAG_WTS_OBSERVER) == null) {
             val observer =
                 object : ContentObserver(Handler(Looper.getMainLooper())) {
                     override fun onChange(
@@ -240,12 +291,11 @@ object SettingsHook {
                 false,
                 observer,
             )
-            XposedHelpers.setAdditionalInstanceField(fragment, observerTag, observer)
+            XposedHelpers.setAdditionalInstanceField(fragment, TAG_WTS_OBSERVER, observer)
         }
 
         // Also watch hotspot state changes (on/off) to update the label
-        val receiverTag = "hotspot_adb_receiver"
-        if (XposedHelpers.getAdditionalInstanceField(fragment, receiverTag) == null) {
+        if (XposedHelpers.getAdditionalInstanceField(fragment, TAG_WTS_RECEIVER) == null) {
             val handler = Handler(Looper.getMainLooper())
             val updatePref = Runnable { updatePrefState(context, pref) }
             val receiver =
@@ -266,7 +316,7 @@ object SettingsHook {
                     addAction("android.net.wifi.WIFI_AP_STATE_CHANGED")
                 },
             )
-            XposedHelpers.setAdditionalInstanceField(fragment, receiverTag, receiver)
+            XposedHelpers.setAdditionalInstanceField(fragment, TAG_WTS_RECEIVER, receiver)
         }
 
         XposedBridge.log("HotspotAdb: added wireless debugging toggle to hotspot settings")
@@ -380,8 +430,7 @@ object SettingsHook {
         XposedHelpers.callMethod(screen, "addPreference", pref)
 
         // Toggle visibility with the main Wireless Debugging switch on this screen.
-        val observerTag = "hotspot_adb_fixed_visibility"
-        if (XposedHelpers.getAdditionalInstanceField(fragment, observerTag) == null) {
+        if (XposedHelpers.getAdditionalInstanceField(fragment, TAG_WD_OBSERVER) == null) {
             val observer =
                 object : ContentObserver(Handler(Looper.getMainLooper())) {
                     override fun onChange(
@@ -396,7 +445,7 @@ object SettingsHook {
                 false,
                 observer,
             )
-            XposedHelpers.setAdditionalInstanceField(fragment, observerTag, observer)
+            XposedHelpers.setAdditionalInstanceField(fragment, TAG_WD_OBSERVER, observer)
         }
         XposedBridge.log("HotspotAdb: added Fixed IP/port toggle to Wireless Debugging")
     }
