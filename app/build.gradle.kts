@@ -15,7 +15,7 @@ android {
 
     defaultConfig {
         applicationId = "io.drsr.hotspotadb"
-        minSdk = 35
+        minSdk = 33
         targetSdk = 36
         versionCode = 4
         versionName = "1.1.0"
