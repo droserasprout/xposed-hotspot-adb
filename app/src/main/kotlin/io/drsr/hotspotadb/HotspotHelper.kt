@@ -1,9 +1,10 @@
 package io.drsr.hotspotadb
 
 import android.content.Context
-import android.net.wifi.WifiManager
 import android.provider.Settings
 import de.robv.android.xposed.XposedBridge
+import io.drsr.hotspotadb.compat.AdbManagerCompat
+import io.drsr.hotspotadb.compat.HotspotApi
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
@@ -13,8 +14,6 @@ object HotspotHelper {
     const val FIXED_IP = "192.168.49.1"
     const val FIXED_PORT = 5555
 
-    private const val WIFI_AP_STATE_ENABLED = 13
-
     fun isFixedEndpointEnabled(context: Context): Boolean {
         return Settings.Global.getInt(context.contentResolver, FIXED_ENDPOINT_KEY, 0) == 1
     }
@@ -23,41 +22,16 @@ object HotspotHelper {
         return Settings.Global.getInt(context.contentResolver, ADB_WIFI_ENABLED, 0) == 1
     }
 
-    /** Returns adbd's current wireless TLS port, or -1 if unavailable. */
-    fun getAdbWirelessPort(): Int {
-        return try {
-            val serviceManagerClass = Class.forName("android.os.ServiceManager")
-            val binder =
-                serviceManagerClass.getMethod("getService", String::class.java)
-                    .invoke(null, "adb")
-            val iAdbManagerStub = Class.forName("android.debug.IAdbManager\$Stub")
-            val adbService =
-                iAdbManagerStub.getMethod("asInterface", android.os.IBinder::class.java)
-                    .invoke(null, binder)
-            adbService.javaClass.getMethod("getAdbWirelessPort").invoke(adbService) as Int
-        } catch (_: Throwable) {
-            -1
-        }
-    }
+    fun getAdbWirelessPort(): Int = AdbManagerCompat.getWirelessPort()
 
-    fun isHotspotActive(context: Context): Boolean {
-        return try {
-            val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val method = wifiManager.javaClass.getMethod("getWifiApState")
-            val state = method.invoke(wifiManager) as Int
-            state == WIFI_AP_STATE_ENABLED
-        } catch (e: Exception) {
-            XposedBridge.log("HotspotAdb: failed to check hotspot state: $e")
-            false
-        }
-    }
+    fun isHotspotActive(context: Context): Boolean = HotspotApi.isApEnabled(context)
 
     /**
      * Returns the IP address of the hotspot (AP) interface.
      * Filters out loopback, mobile data (rmnet*), non-wlan interfaces, and the station Wi-Fi IP.
      */
     fun getHotspotIpAddress(context: Context): String? {
-        val stationIp = getStationWifiIp(context)
+        val stationIp = HotspotApi.getStationWifiIp(context)
         return getApInterfaceIp(excludeIp = stationIp)
     }
 
@@ -66,7 +40,7 @@ object HotspotHelper {
 
     /** Returns the AP interface name (e.g. "wlan1"), excluding the station Wi-Fi iface. */
     fun getApInterfaceName(context: Context): String? {
-        val stationIp = getStationWifiIp(context)
+        val stationIp = HotspotApi.getStationWifiIp(context)
         return findApInterface(excludeIp = stationIp)?.name
     }
 
@@ -103,17 +77,5 @@ object HotspotHelper {
             XposedBridge.log("HotspotAdb: failed to find AP interface: $e")
         }
         return null
-    }
-
-    @Suppress("DEPRECATION")
-    private fun getStationWifiIp(context: Context): String? {
-        return try {
-            val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val ipInt = wifiManager.connectionInfo.ipAddress
-            if (ipInt == 0) return null
-            "${ipInt and 0xFF}.${ipInt shr 8 and 0xFF}.${ipInt shr 16 and 0xFF}.${ipInt shr 24 and 0xFF}"
-        } catch (_: Exception) {
-            null
-        }
     }
 }

@@ -14,6 +14,7 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
+import io.drsr.hotspotadb.compat.SettingsAppRefs
 
 object SettingsHook {
     private const val TAG_WTS_OBSERVER = "hotspot_adb_observer"
@@ -77,16 +78,7 @@ object SettingsHook {
     }
 
     private fun hookIsWifiConnected(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // Android 16+: AdbWirelessDebuggingPreferenceController; Android 15: WirelessDebuggingPreferenceController
-        val controllerClass =
-            try {
-                XposedHelpers.findClass(
-                    "com.android.settings.development.AdbWirelessDebuggingPreferenceController",
-                    lpparam.classLoader,
-                ).name
-            } catch (_: XposedHelpers.ClassNotFoundError) {
-                "com.android.settings.development.WirelessDebuggingPreferenceController"
-            }
+        val controllerClass = SettingsAppRefs.resolveControllerClassName(lpparam.classLoader)
         try {
             XposedHelpers.findAndHookMethod(
                 controllerClass,
@@ -252,15 +244,7 @@ object SettingsHook {
             ) { _, _, _ ->
                 try {
                     val subSettingsClass = XposedHelpers.findClass("com.android.settings.SubSettings", context.classLoader)
-                    // Android 16+: AdbWirelessDebuggingFragment; Android 15: WirelessDebuggingFragment
-                    val fragmentClass =
-                        try {
-                            lpparam.classLoader.loadClass(
-                                "com.android.settings.development.AdbWirelessDebuggingFragment",
-                            ).name
-                        } catch (_: ClassNotFoundException) {
-                            "com.android.settings.development.WirelessDebuggingFragment"
-                        }
+                    val fragmentClass = SettingsAppRefs.resolveFragmentClassName(lpparam.classLoader)
                     val intent = android.content.Intent(context, subSettingsClass)
                     intent.putExtra(":settings:show_fragment", fragmentClass)
                     context.startActivity(intent)
@@ -323,17 +307,8 @@ object SettingsHook {
     }
 
     private fun hookWirelessDebuggingFragment(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // Android 16+: AdbWirelessDebuggingFragment; Android 15: WirelessDebuggingFragment.
-        // Neither overrides onStart() directly, so hook DashboardFragment.onStart() and filter.
-        val fragmentClassName =
-            try {
-                XposedHelpers.findClass(
-                    "com.android.settings.development.AdbWirelessDebuggingFragment",
-                    lpparam.classLoader,
-                ).name
-            } catch (_: XposedHelpers.ClassNotFoundError) {
-                "com.android.settings.development.WirelessDebuggingFragment"
-            }
+        // The target fragment doesn't override onStart() directly, so hook DashboardFragment.onStart() and filter.
+        val fragmentClassName = SettingsAppRefs.resolveFragmentClassName(lpparam.classLoader)
         try {
             XposedHelpers.findAndHookMethod(
                 "com.android.settings.dashboard.DashboardFragment",
@@ -409,14 +384,14 @@ object SettingsHook {
             }
         XposedHelpers.callMethod(pref, "setOnPreferenceChangeListener", changeProxy)
 
-        // Place the toggle right after the IP/Port row. On Android 15 that row has no
-        // key (it's the first preference on the screen); on Android 16+ it's
-        // "adb_ip_addr_pref". Resolve by key when possible, else default to index 0.
+        // Place the toggle right after the IP/Port row. Resolve by the "adb_ip_addr_pref"
+        // key (present A11–A14, A16) when possible, else default to index 0 (A15, which
+        // reorganized the fragment and left the IP row keyless).
         val count = XposedHelpers.callMethod(screen, "getPreferenceCount") as Int
         var targetIndex = 0
         for (i in 0 until count) {
             val p = XposedHelpers.callMethod(screen, "getPreference", i)
-            if (XposedHelpers.callMethod(p, "getKey") as? String == "adb_ip_addr_pref") {
+            if (XposedHelpers.callMethod(p, "getKey") as? String == SettingsAppRefs.IP_PREF_KEY) {
                 targetIndex = i
                 break
             }
