@@ -17,8 +17,8 @@ android {
         applicationId = "io.drsr.hotspotadb"
         minSdk = 33
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.1.0"
+        versionCode = 5
+        versionName = "1.2.0"
     }
 
     signingConfigs {

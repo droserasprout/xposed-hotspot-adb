@@ -24,7 +24,40 @@ object FrameworkHook {
     fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
         SubnetAlias.setClassLoader(lpparam.classLoader)
         hookGetCurrentWifiApInfo(lpparam)
+        hookVerifyWifiNetwork(lpparam)
         hookBroadcastReceiver(lpparam)
+    }
+
+    /**
+     * Android 16 QPR gates the initial enable on verifyWifiNetwork(bssid, ssid), which
+     * consults the user-trusted-networks store and disables ADB_WIFI when the network
+     * isn't trusted. Our synthetic hotspot BSSID is never trusted, so treat the hotspot
+     * as trusted while it is active. Absent on older versions (hook install no-ops).
+     *
+     * Must run in beforeHookedMethod: the original body calls startConfirmationForNetwork()
+     * for untrusted networks, which launches SystemUI's WifiDebuggingActivity and then
+     * writes ADB_WIFI_ENABLED=0 (deny), flapping the toggle. Returning early skips it.
+     */
+    private fun hookVerifyWifiNetwork(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val handlerClass = AdbFrameworkRefs.findHandlerClass(lpparam.classLoader)
+            XposedHelpers.findAndHookMethod(
+                handlerClass,
+                "verifyWifiNetwork",
+                String::class.java,
+                String::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val context = getContext(param.thisObject) ?: return
+                        if (!HotspotHelper.isHotspotActive(context)) return
+                        param.result = true
+                        XposedBridge.log("HotspotAdb: verifyWifiNetwork -> true (hotspot active)")
+                    }
+                },
+            )
+        } catch (e: Throwable) {
+            XposedBridge.log("HotspotAdb: failed to hook verifyWifiNetwork: $e")
+        }
     }
 
     private fun hookGetCurrentWifiApInfo(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -54,7 +87,7 @@ object FrameworkHook {
                     }
                 },
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook getCurrentWifiApInfo: $e")
         }
     }
@@ -121,7 +154,7 @@ object FrameworkHook {
         try {
             hookBroadcastReceiverClass(cls)
             XposedBridge.log("HotspotAdb: hooked BroadcastReceiver ${cls.name}")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook ${cls.name}: $e")
         }
     }
@@ -179,7 +212,7 @@ object FrameworkHook {
                     }
                 },
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook Settings.Global.putInt: $e")
         }
     }

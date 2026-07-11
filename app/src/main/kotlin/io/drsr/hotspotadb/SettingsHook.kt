@@ -32,20 +32,27 @@ object SettingsHook {
 
     private fun hookFragmentCleanup(lpparam: XC_LoadPackage.LoadPackageParam) {
         // Unregister observers/receivers we attached in injection hooks. Both target
-        // fragments extend DashboardFragment so one hook covers them.
-        try {
-            XposedHelpers.findAndHookMethod(
-                "com.android.settings.dashboard.DashboardFragment",
-                lpparam.classLoader,
-                "onDestroyView",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        cleanupFragment(param.thisObject)
-                    }
-                },
-            )
-        } catch (e: Exception) {
-            XposedBridge.log("HotspotAdb: failed to hook DashboardFragment.onDestroyView: $e")
+        // fragments extend DashboardFragment so one hook covers them. Android 16 QPR
+        // dropped onDestroyView from DashboardFragment; fall back to onStop, which
+        // pairs symmetrically with the onStart-time registration.
+        val cleanup =
+            object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    cleanupFragment(param.thisObject)
+                }
+            }
+        for (method in listOf("onDestroyView", "onStop")) {
+            try {
+                XposedHelpers.findAndHookMethod(
+                    "com.android.settings.dashboard.DashboardFragment",
+                    lpparam.classLoader,
+                    method,
+                    cleanup,
+                )
+                return
+            } catch (e: Throwable) {
+                XposedBridge.log("HotspotAdb: DashboardFragment.$method unavailable: $e")
+            }
         }
     }
 
@@ -97,7 +104,7 @@ object SettingsHook {
                     }
                 },
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook isWifiConnected: $e")
         }
     }
@@ -123,7 +130,7 @@ object SettingsHook {
                     }
                 },
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook getIpv4Address: $e")
         }
     }
@@ -149,7 +156,7 @@ object SettingsHook {
                     }
                 },
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook getAdbWirelessPort: $e")
         }
     }
@@ -184,7 +191,7 @@ object SettingsHook {
                     }
                 },
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook WifiTetherSettings: $e")
         }
     }
@@ -325,7 +332,7 @@ object SettingsHook {
                     }
                 },
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             XposedBridge.log("HotspotAdb: failed to hook DashboardFragment.onStart for $fragmentClassName: $e")
         }
     }
