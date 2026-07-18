@@ -1,7 +1,6 @@
 package io.drsr.hotspotadb
 
 import android.content.Context
-import de.robv.android.xposed.XposedBridge
 import io.drsr.hotspotadb.compat.NetdCompat
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -31,9 +30,9 @@ object SubnetAlias {
         try {
             NetdCompat.interfaceAddAddress(netd, iface, HotspotHelper.FIXED_IP, 24)
             appliedIface = iface
-            XposedBridge.log("HotspotAdb: aliased ${HotspotHelper.FIXED_IP}/24 on $iface")
+            Xp.log("HotspotAdb: aliased ${HotspotHelper.FIXED_IP}/24 on $iface")
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: interfaceAddAddress failed on $iface: $e")
+            Xp.log("HotspotAdb: interfaceAddAddress failed on $iface: $e")
         }
     }
 
@@ -44,9 +43,9 @@ object SubnetAlias {
         val netd = getNetd() ?: return
         try {
             NetdCompat.interfaceDelAddress(netd, iface, HotspotHelper.FIXED_IP, 24)
-            XposedBridge.log("HotspotAdb: removed ${HotspotHelper.FIXED_IP}/24 from $iface")
+            Xp.log("HotspotAdb: removed ${HotspotHelper.FIXED_IP}/24 from $iface")
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: interfaceDelAddress failed on $iface: $e")
+            Xp.log("HotspotAdb: interfaceDelAddress failed on $iface: $e")
         }
     }
 

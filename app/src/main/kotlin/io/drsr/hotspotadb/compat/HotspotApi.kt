@@ -2,7 +2,7 @@ package io.drsr.hotspotadb.compat
 
 import android.content.Context
 import android.net.wifi.WifiManager
-import de.robv.android.xposed.XposedBridge
+import io.drsr.hotspotadb.Xp
 
 object HotspotApi {
     private const val WIFI_AP_STATE_ENABLED = 13
@@ -14,7 +14,7 @@ object HotspotApi {
             val state = wm.javaClass.getMethod("getWifiApState").invoke(wm) as Int
             state == WIFI_AP_STATE_ENABLED
         } catch (e: Exception) {
-            XposedBridge.log("HotspotAdb: failed to check hotspot state: $e")
+            Xp.log("HotspotAdb: failed to check hotspot state: $e")
             false
         }
     }

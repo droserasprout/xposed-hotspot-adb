@@ -1,7 +1,7 @@
 package io.drsr.hotspotadb.compat
 
 import android.content.BroadcastReceiver
-import de.robv.android.xposed.XposedHelpers
+import io.drsr.hotspotadb.Reflect
 
 /**
  * Class resolution for ADB-related framework internals. Callers hook by class object,
@@ -19,7 +19,7 @@ object AdbFrameworkRefs {
     private const val BROADCAST_RECEIVER_INNER_SCAN_LIMIT = 10
 
     fun findHandlerClass(loader: ClassLoader): Class<*> {
-        return XposedHelpers.findClass(HANDLER, loader)
+        return loader.loadClass(HANDLER)
     }
 
     fun findConnectionInfoClass(loader: ClassLoader): Class<*> {
@@ -32,7 +32,7 @@ object AdbFrameworkRefs {
         bssid: String,
         ssid: String,
     ): Any {
-        return XposedHelpers.newInstance(findConnectionInfoClass(loader), bssid, ssid)
+        return Reflect.newInstance(findConnectionInfoClass(loader), bssid, ssid)
     }
 
     /**

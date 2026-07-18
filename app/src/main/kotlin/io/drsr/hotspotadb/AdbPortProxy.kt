@@ -1,6 +1,5 @@
 package io.drsr.hotspotadb
 
-import de.robv.android.xposed.XposedBridge
 import java.io.IOException
 import java.net.BindException
 import java.net.InetSocketAddress
@@ -47,15 +46,15 @@ object AdbPortProxy {
                     isDaemon = true
                     start()
                 }
-                XposedBridge.log(
+                Xp.log(
                     "HotspotAdb: proxy listening on 0.0.0.0:${HotspotHelper.FIXED_PORT} -> 127.0.0.1:$realPort",
                 )
             } catch (e: BindException) {
-                XposedBridge.log("HotspotAdb: proxy bind failed (port busy?): $e")
+                Xp.log("HotspotAdb: proxy bind failed (port busy?): $e")
                 serverSocket = null
                 boundToPort = -1
             } catch (e: Exception) {
-                XposedBridge.log("HotspotAdb: proxy start failed: $e")
+                Xp.log("HotspotAdb: proxy start failed: $e")
                 serverSocket = null
                 boundToPort = -1
             }
@@ -73,7 +72,7 @@ object AdbPortProxy {
         if (ss != null) {
             try {
                 ss.close()
-                XposedBridge.log("HotspotAdb: proxy stopped")
+                Xp.log("HotspotAdb: proxy stopped")
             } catch (_: IOException) {
             }
         }
@@ -120,7 +119,7 @@ object AdbPortProxy {
             }
             downTask.cancel(true)
         } catch (e: IOException) {
-            XposedBridge.log("HotspotAdb: proxy handle failed: $e")
+            Xp.log("HotspotAdb: proxy handle failed: $e")
         } finally {
             closeQuietly(client)
             closeQuietly(upstream)

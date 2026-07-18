@@ -9,10 +9,6 @@ import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import io.drsr.hotspotadb.compat.AdbFrameworkRefs
 import io.drsr.hotspotadb.compat.ClassRefs
 import io.drsr.hotspotadb.compat.HotspotApi
@@ -21,11 +17,11 @@ object FrameworkHook {
     @Volatile
     private var observersRegistered = false
 
-    fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
-        SubnetAlias.setClassLoader(lpparam.classLoader)
-        hookGetCurrentWifiApInfo(lpparam)
-        hookVerifyWifiNetwork(lpparam)
-        hookBroadcastReceiver(lpparam)
+    fun init(classLoader: ClassLoader) {
+        SubnetAlias.setClassLoader(classLoader)
+        hookGetCurrentWifiApInfo(classLoader)
+        hookVerifyWifiNetwork(classLoader)
+        hookBroadcastReceiver(classLoader)
     }
 
     /**
@@ -34,61 +30,60 @@ object FrameworkHook {
      * isn't trusted. Our synthetic hotspot BSSID is never trusted, so treat the hotspot
      * as trusted while it is active. Absent on older versions (hook install no-ops).
      *
-     * Must run in beforeHookedMethod: the original body calls startConfirmationForNetwork()
-     * for untrusted networks, which launches SystemUI's WifiDebuggingActivity and then
-     * writes ADB_WIFI_ENABLED=0 (deny), flapping the toggle. Returning early skips it.
+     * We skip the original body (never call chain.proceed): for untrusted networks it
+     * calls startConfirmationForNetwork(), which launches SystemUI's WifiDebuggingActivity
+     * and then writes ADB_WIFI_ENABLED=0 (deny), flapping the toggle.
      */
-    private fun hookVerifyWifiNetwork(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookVerifyWifiNetwork(classLoader: ClassLoader) {
         try {
-            val handlerClass = AdbFrameworkRefs.findHandlerClass(lpparam.classLoader)
-            XposedHelpers.findAndHookMethod(
-                handlerClass,
-                "verifyWifiNetwork",
-                String::class.java,
-                String::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val context = getContext(param.thisObject) ?: return
-                        if (!HotspotHelper.isHotspotActive(context)) return
-                        param.result = true
-                        XposedBridge.log("HotspotAdb: verifyWifiNetwork -> true (hotspot active)")
-                    }
-                },
-            )
+            val handlerClass = AdbFrameworkRefs.findHandlerClass(classLoader)
+            val method =
+                Reflect.findMethod(
+                    handlerClass,
+                    "verifyWifiNetwork",
+                    String::class.java,
+                    String::class.java,
+                )
+            Xp.hook(method).intercept { chain ->
+                val context = getContext(chain.thisObject)
+                if (context != null && HotspotHelper.isHotspotActive(context)) {
+                    Xp.log("HotspotAdb: verifyWifiNetwork -> true (hotspot active)")
+                    true
+                } else {
+                    chain.proceed()
+                }
+            }
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook verifyWifiNetwork: $e")
+            Xp.log("HotspotAdb: failed to hook verifyWifiNetwork: $e")
         }
     }
 
-    private fun hookGetCurrentWifiApInfo(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookGetCurrentWifiApInfo(classLoader: ClassLoader) {
         try {
-            val handlerClass = AdbFrameworkRefs.findHandlerClass(lpparam.classLoader)
-            XposedHelpers.findAndHookMethod(
-                handlerClass,
-                "getCurrentWifiApInfo",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        if (param.result != null) return
+            val handlerClass = AdbFrameworkRefs.findHandlerClass(classLoader)
+            val method = Reflect.findMethod(handlerClass, "getCurrentWifiApInfo")
+            Xp.hook(method).intercept { chain ->
+                val result = chain.proceed()
+                if (result != null) return@intercept result
 
-                        val context = getContext(param.thisObject) ?: return
-                        if (!HotspotHelper.isHotspotActive(context)) return
+                val context = getContext(chain.thisObject) ?: return@intercept result
+                if (!HotspotHelper.isHotspotActive(context)) return@intercept result
 
-                        try {
-                            val ssid = HotspotApi.getHotspotSsid(context)
-                            val info = AdbFrameworkRefs.newConnectionInfo(lpparam.classLoader, "02:00:00:00:00:00", ssid)
-                            param.result = info
-                            XposedBridge.log("HotspotAdb: getCurrentWifiApInfo -> synthetic (hotspot active)")
+                try {
+                    val ssid = HotspotApi.getHotspotSsid(context)
+                    val info = AdbFrameworkRefs.newConnectionInfo(classLoader, "02:00:00:00:00:00", ssid)
+                    Xp.log("HotspotAdb: getCurrentWifiApInfo -> synthetic (hotspot active)")
 
-                            ensureObservers(context)
-                            evaluateProxy(context)
-                        } catch (e: Exception) {
-                            XposedBridge.log("HotspotAdb: failed to create AdbConnectionInfo: $e")
-                        }
-                    }
-                },
-            )
+                    ensureObservers(context)
+                    evaluateProxy(context)
+                    info
+                } catch (e: Exception) {
+                    Xp.log("HotspotAdb: failed to create AdbConnectionInfo: $e")
+                    result
+                }
+            }
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook getCurrentWifiApInfo: $e")
+            Xp.log("HotspotAdb: failed to hook getCurrentWifiApInfo: $e")
         }
     }
 
@@ -118,9 +113,9 @@ object FrameworkHook {
                     observer,
                 )
                 observersRegistered = true
-                XposedBridge.log("HotspotAdb: framework observers registered")
+                Xp.log("HotspotAdb: framework observers registered")
             } catch (e: Exception) {
-                XposedBridge.log("HotspotAdb: failed to register observers: $e")
+                Xp.log("HotspotAdb: failed to register observers: $e")
             }
         }
     }
@@ -140,89 +135,90 @@ object FrameworkHook {
                 AdbPortProxy.stop()
             }
         } catch (e: Exception) {
-            XposedBridge.log("HotspotAdb: evaluateProxy failed: $e")
+            Xp.log("HotspotAdb: evaluateProxy failed: $e")
         }
     }
 
-    private fun hookBroadcastReceiver(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val cls = AdbFrameworkRefs.resolveBroadcastReceiverClass(lpparam.classLoader)
+    private fun hookBroadcastReceiver(classLoader: ClassLoader) {
+        val cls = AdbFrameworkRefs.resolveBroadcastReceiverClass(classLoader)
         if (cls == null) {
-            XposedBridge.log("HotspotAdb: BroadcastReceiver not found, falling back to ContentResolver hook")
-            hookSettingsGlobalDisable(lpparam)
+            Xp.log("HotspotAdb: BroadcastReceiver not found, falling back to ContentResolver hook")
+            hookSettingsGlobalDisable(classLoader)
             return
         }
         try {
             hookBroadcastReceiverClass(cls)
-            XposedBridge.log("HotspotAdb: hooked BroadcastReceiver ${cls.name}")
+            Xp.log("HotspotAdb: hooked BroadcastReceiver ${cls.name}")
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook ${cls.name}: $e")
+            Xp.log("HotspotAdb: failed to hook ${cls.name}: $e")
         }
     }
 
     private fun hookBroadcastReceiverClass(cls: Class<*>) {
-        XposedBridge.hookAllMethods(
-            cls,
-            "onReceive",
-            object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val context = param.args[0] as Context
-                    val intent = param.args[1] as Intent
-                    val action = intent.action ?: return
+        for (method in Reflect.methodsNamed(cls, "onReceive")) {
+            Xp.hook(method).intercept { chain ->
+                val context = chain.getArg(0) as Context
+                val intent = chain.getArg(1) as Intent
+                val action = intent.action
 
-                    if (action == WifiManager.WIFI_STATE_CHANGED_ACTION ||
-                        action == WifiManager.NETWORK_STATE_CHANGED_ACTION
-                    ) {
-                        if (HotspotHelper.isHotspotActive(context)) {
-                            param.result = null
-                            XposedBridge.log("HotspotAdb: suppressed $action (hotspot active)")
-                        }
-                    }
+                val suppress =
+                    action != null &&
+                        (
+                            action == WifiManager.WIFI_STATE_CHANGED_ACTION ||
+                                action == WifiManager.NETWORK_STATE_CHANGED_ACTION
+                        ) &&
+                        HotspotHelper.isHotspotActive(context)
+
+                if (suppress) {
+                    Xp.log("HotspotAdb: suppressed $action (hotspot active)")
+                } else {
+                    chain.proceed()
                 }
 
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val context = param.args[0] as? Context ?: return
-                    ensureObservers(context)
-                    evaluateProxy(context)
-                }
-            },
-        )
-    }
-
-    private fun hookSettingsGlobalDisable(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // Fallback: intercept Settings.Global.putInt to prevent ADB_WIFI_ENABLED = 0 when hotspot is active
-        try {
-            XposedHelpers.findAndHookMethod(
-                "android.provider.Settings\$Global",
-                lpparam.classLoader,
-                "putInt",
-                ContentResolver::class.java,
-                String::class.java,
-                Int::class.javaPrimitiveType,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val key = param.args[1] as? String ?: return
-                        val value = param.args[2] as Int
-                        if (key != "adb_wifi_enabled" || value != 0) return
-                        val resolver = param.args[0] as ContentResolver
-                        val context = ClassRefs.contextFromResolver(resolver)
-                        if (context != null && HotspotHelper.isHotspotActive(context)) {
-                            param.result = false
-                            XposedBridge.log("HotspotAdb: blocked ADB_WIFI_ENABLED=0 (hotspot active)")
-                        }
-                    }
-                },
-            )
-        } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook Settings.Global.putInt: $e")
+                ensureObservers(context)
+                evaluateProxy(context)
+                null
+            }
         }
     }
 
-    private fun getContext(handler: Any): Context? {
+    private fun hookSettingsGlobalDisable(classLoader: ClassLoader) {
+        // Fallback: intercept Settings.Global.putInt to prevent ADB_WIFI_ENABLED = 0 when hotspot is active
+        try {
+            val settingsGlobal = classLoader.loadClass("android.provider.Settings\$Global")
+            val method =
+                Reflect.findMethod(
+                    settingsGlobal,
+                    "putInt",
+                    ContentResolver::class.java,
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                )
+            Xp.hook(method).intercept { chain ->
+                val key = chain.getArg(1) as? String
+                val value = chain.getArg(2) as Int
+                if (key == "adb_wifi_enabled" && value == 0) {
+                    val resolver = chain.getArg(0) as ContentResolver
+                    val context = ClassRefs.contextFromResolver(resolver)
+                    if (context != null && HotspotHelper.isHotspotActive(context)) {
+                        Xp.log("HotspotAdb: blocked ADB_WIFI_ENABLED=0 (hotspot active)")
+                        return@intercept false
+                    }
+                }
+                chain.proceed()
+            }
+        } catch (e: Throwable) {
+            Xp.log("HotspotAdb: failed to hook Settings.Global.putInt: $e")
+        }
+    }
+
+    private fun getContext(handler: Any?): Context? {
+        if (handler == null) return null
         return try {
-            val manager = XposedHelpers.getObjectField(handler, "this\$0")
-            XposedHelpers.getObjectField(manager, "mContext") as Context
+            val manager = Reflect.getField(handler, "this\$0")!!
+            Reflect.getField(manager, "mContext") as Context
         } catch (e: Exception) {
-            XposedBridge.log("HotspotAdb: failed to get context: $e")
+            Xp.log("HotspotAdb: failed to get context: $e")
             null
         }
     }

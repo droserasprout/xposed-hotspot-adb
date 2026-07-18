@@ -45,9 +45,16 @@ android {
     kotlinOptions {
         jvmTarget = "21"
     }
+
+    packaging {
+        // Keep the modern-Xposed loader manifest (module.prop, scope.list, java_init.list).
+        resources {
+            merges += "META-INF/xposed/*"
+        }
+    }
 }
 
 dependencies {
-    compileOnly("de.robv.android.xposed:api:82")
+    compileOnly("io.github.libxposed:api:101.0.0")
     compileOnly("androidx.preference:preference:1.2.1")
 }

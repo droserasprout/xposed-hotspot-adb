@@ -2,7 +2,6 @@ package io.drsr.hotspotadb
 
 import android.content.Context
 import android.provider.Settings
-import de.robv.android.xposed.XposedBridge
 import io.drsr.hotspotadb.compat.AdbManagerCompat
 import io.drsr.hotspotadb.compat.HotspotApi
 import java.net.Inet4Address
@@ -74,7 +73,7 @@ object HotspotHelper {
                 if (hasMatchingIp) return iface
             }
         } catch (e: Exception) {
-            XposedBridge.log("HotspotAdb: failed to find AP interface: $e")
+            Xp.log("HotspotAdb: failed to find AP interface: $e")
         }
         return null
     }

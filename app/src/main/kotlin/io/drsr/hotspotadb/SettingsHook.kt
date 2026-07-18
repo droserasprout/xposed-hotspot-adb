@@ -10,10 +10,6 @@ import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedBridge
-import de.robv.android.xposed.XposedHelpers
-import de.robv.android.xposed.callbacks.XC_LoadPackage
 import io.drsr.hotspotadb.compat.SettingsAppRefs
 
 object SettingsHook {
@@ -21,143 +17,129 @@ object SettingsHook {
     private const val TAG_WTS_RECEIVER = "hotspot_adb_receiver"
     private const val TAG_WD_OBSERVER = "hotspot_adb_fixed_visibility"
 
-    fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
-        hookIsWifiConnected(lpparam)
-        hookGetIpv4Address(lpparam)
-        hookGetAdbWirelessPort(lpparam)
-        hookWifiTetherSettings(lpparam)
-        hookWirelessDebuggingFragment(lpparam)
-        hookFragmentCleanup(lpparam)
+    fun init(classLoader: ClassLoader) {
+        hookIsWifiConnected(classLoader)
+        hookGetIpv4Address(classLoader)
+        hookGetAdbWirelessPort(classLoader)
+        hookWifiTetherSettings(classLoader)
+        hookWirelessDebuggingFragment(classLoader)
+        hookFragmentCleanup(classLoader)
     }
 
-    private fun hookFragmentCleanup(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookFragmentCleanup(classLoader: ClassLoader) {
         // Unregister observers/receivers we attached in injection hooks. Both target
         // fragments extend DashboardFragment so one hook covers them. Android 16 QPR
         // dropped onDestroyView from DashboardFragment; fall back to onStop, which
         // pairs symmetrically with the onStart-time registration.
-        val cleanup =
-            object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    cleanupFragment(param.thisObject)
-                }
+        val dashboard =
+            try {
+                classLoader.loadClass("com.android.settings.dashboard.DashboardFragment")
+            } catch (e: Throwable) {
+                Xp.log("HotspotAdb: DashboardFragment not found: $e")
+                return
             }
         for (method in listOf("onDestroyView", "onStop")) {
             try {
-                XposedHelpers.findAndHookMethod(
-                    "com.android.settings.dashboard.DashboardFragment",
-                    lpparam.classLoader,
-                    method,
-                    cleanup,
-                )
+                val target = Reflect.findMethod(dashboard, method)
+                Xp.hook(target).intercept { chain ->
+                    val result = chain.proceed()
+                    chain.thisObject?.let { cleanupFragment(it) }
+                    result
+                }
                 return
             } catch (e: Throwable) {
-                XposedBridge.log("HotspotAdb: DashboardFragment.$method unavailable: $e")
+                Xp.log("HotspotAdb: DashboardFragment.$method unavailable: $e")
             }
         }
     }
 
     private fun cleanupFragment(fragment: Any) {
-        val context =
-            XposedHelpers.callMethod(fragment, "getContext") as? Context ?: return
+        val context = Reflect.call(fragment, "getContext") as? Context ?: return
         val resolver = context.contentResolver
         for (tag in listOf(TAG_WTS_OBSERVER, TAG_WD_OBSERVER)) {
             val observer =
-                XposedHelpers.getAdditionalInstanceField(fragment, tag) as? ContentObserver
-                    ?: continue
+                Reflect.getInstanceField(fragment, tag) as? ContentObserver ?: continue
             try {
                 resolver.unregisterContentObserver(observer)
             } catch (e: Throwable) {
-                XposedBridge.log("HotspotAdb: unregister $tag failed: $e")
+                Xp.log("HotspotAdb: unregister $tag failed: $e")
             }
-            XposedHelpers.removeAdditionalInstanceField(fragment, tag)
+            Reflect.removeInstanceField(fragment, tag)
         }
         val receiver =
-            XposedHelpers.getAdditionalInstanceField(fragment, TAG_WTS_RECEIVER)
-                as? BroadcastReceiver
+            Reflect.getInstanceField(fragment, TAG_WTS_RECEIVER) as? BroadcastReceiver
         if (receiver != null) {
             try {
                 context.unregisterReceiver(receiver)
             } catch (e: Throwable) {
-                XposedBridge.log("HotspotAdb: unregister $TAG_WTS_RECEIVER failed: $e")
+                Xp.log("HotspotAdb: unregister $TAG_WTS_RECEIVER failed: $e")
             }
-            XposedHelpers.removeAdditionalInstanceField(fragment, TAG_WTS_RECEIVER)
+            Reflect.removeInstanceField(fragment, TAG_WTS_RECEIVER)
         }
     }
 
-    private fun hookIsWifiConnected(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val controllerClass = SettingsAppRefs.resolveControllerClassName(lpparam.classLoader)
+    private fun hookIsWifiConnected(classLoader: ClassLoader) {
+        val controllerClassName = SettingsAppRefs.resolveControllerClassName(classLoader)
         try {
-            XposedHelpers.findAndHookMethod(
-                controllerClass,
-                lpparam.classLoader,
-                "isWifiConnected",
-                Context::class.java,
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        if (param.result == false) {
-                            val context = param.args[0] as Context
-                            if (HotspotHelper.isHotspotActive(context)) {
-                                param.result = true
-                                XposedBridge.log("HotspotAdb: isWifiConnected -> true (hotspot active)")
-                            }
-                        }
+            val controller = classLoader.loadClass(controllerClassName)
+            val method = Reflect.findMethod(controller, "isWifiConnected", Context::class.java)
+            Xp.hook(method).intercept { chain ->
+                val result = chain.proceed()
+                if (result == false) {
+                    val context = chain.getArg(0) as Context
+                    if (HotspotHelper.isHotspotActive(context)) {
+                        Xp.log("HotspotAdb: isWifiConnected -> true (hotspot active)")
+                        return@intercept true
                     }
-                },
-            )
+                }
+                result
+            }
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook isWifiConnected: $e")
+            Xp.log("HotspotAdb: failed to hook isWifiConnected: $e")
         }
     }
 
-    private fun hookGetIpv4Address(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookGetIpv4Address(classLoader: ClassLoader) {
         try {
-            XposedHelpers.findAndHookMethod(
-                "com.android.settings.development.AdbIpAddressPreferenceController",
-                lpparam.classLoader,
-                "getIpv4Address",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        val context =
-                            XposedHelpers.getObjectField(param.thisObject, "mContext") as? Context
-                                ?: return
-                        if (!HotspotHelper.isHotspotActive(context)) return
-                        if (HotspotHelper.isFixedEndpointEnabled(context)) {
-                            param.result = HotspotHelper.FIXED_IP
-                            return
-                        }
-                        val ip = HotspotHelper.getHotspotIpAddress(context) ?: return
-                        param.result = ip
-                    }
-                },
-            )
+            val controller =
+                classLoader.loadClass("com.android.settings.development.AdbIpAddressPreferenceController")
+            val method = Reflect.findMethod(controller, "getIpv4Address")
+            Xp.hook(method).intercept { chain ->
+                val result = chain.proceed()
+                val context =
+                    Reflect.getField(chain.thisObject!!, "mContext") as? Context
+                        ?: return@intercept result
+                if (!HotspotHelper.isHotspotActive(context)) return@intercept result
+                if (HotspotHelper.isFixedEndpointEnabled(context)) {
+                    return@intercept HotspotHelper.FIXED_IP
+                }
+                HotspotHelper.getHotspotIpAddress(context) ?: result
+            }
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook getIpv4Address: $e")
+            Xp.log("HotspotAdb: failed to hook getIpv4Address: $e")
         }
     }
 
-    private fun hookGetAdbWirelessPort(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookGetAdbWirelessPort(classLoader: ClassLoader) {
         // Override the port value returned by IAdbManager binder calls in the Settings process only.
         // adbd on the server side keeps binding its real port; the TCP proxy in system_server forwards 5555 to it.
         try {
-            XposedHelpers.findAndHookMethod(
-                "android.debug.IAdbManager\$Stub\$Proxy",
-                lpparam.classLoader,
-                "getAdbWirelessPort",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        try {
-                            val app = currentApplication() ?: return
-                            if (!HotspotHelper.isFixedEndpointEnabled(app)) return
-                            if (!HotspotHelper.isAdbWifiEnabled(app)) return
-                            param.result = HotspotHelper.FIXED_PORT
-                        } catch (e: Throwable) {
-                            XposedBridge.log("HotspotAdb: port override failed: $e")
-                        }
-                    }
-                },
-            )
+            val proxyStub = classLoader.loadClass("android.debug.IAdbManager\$Stub\$Proxy")
+            val method = Reflect.findMethod(proxyStub, "getAdbWirelessPort")
+            Xp.hook(method).intercept { chain ->
+                val result = chain.proceed()
+                try {
+                    val app = currentApplication() ?: return@intercept result
+                    if (!HotspotHelper.isFixedEndpointEnabled(app)) return@intercept result
+                    if (!HotspotHelper.isAdbWifiEnabled(app)) return@intercept result
+                    HotspotHelper.FIXED_PORT
+                } catch (e: Throwable) {
+                    Xp.log("HotspotAdb: port override failed: $e")
+                    result
+                }
+            }
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook getAdbWirelessPort: $e")
+            Xp.log("HotspotAdb: failed to hook getAdbWirelessPort: $e")
         }
     }
 
@@ -170,65 +152,52 @@ object SettingsHook {
         }
     }
 
-    private fun hookWifiTetherSettings(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookWifiTetherSettings(classLoader: ClassLoader) {
         try {
-            val tetherSettingsClass =
-                XposedHelpers.findClass(
-                    "com.android.settings.wifi.tether.WifiTetherSettings",
-                    lpparam.classLoader,
-                )
-
-            XposedHelpers.findAndHookMethod(
-                tetherSettingsClass,
-                "onStart",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        try {
-                            injectWirelessDebuggingPref(param.thisObject, lpparam)
-                        } catch (e: Throwable) {
-                            XposedBridge.log("HotspotAdb: failed to inject preference: $e")
-                        }
-                    }
-                },
-            )
+            val tetherSettings =
+                classLoader.loadClass("com.android.settings.wifi.tether.WifiTetherSettings")
+            val method = Reflect.findMethod(tetherSettings, "onStart")
+            Xp.hook(method).intercept { chain ->
+                val result = chain.proceed()
+                try {
+                    injectWirelessDebuggingPref(chain.thisObject!!, classLoader)
+                } catch (e: Throwable) {
+                    Xp.log("HotspotAdb: failed to inject preference: $e")
+                }
+                result
+            }
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook WifiTetherSettings: $e")
+            Xp.log("HotspotAdb: failed to hook WifiTetherSettings: $e")
         }
     }
 
     private fun injectWirelessDebuggingPref(
         fragment: Any,
-        lpparam: XC_LoadPackage.LoadPackageParam,
+        classLoader: ClassLoader,
     ) {
         val screen =
-            XposedHelpers.callMethod(fragment, "getPreferenceScreen") ?: run {
-                XposedBridge.log("HotspotAdb: preferenceScreen is null")
+            Reflect.call(fragment, "getPreferenceScreen") ?: run {
+                Xp.log("HotspotAdb: preferenceScreen is null")
                 return
             }
-        if (XposedHelpers.callMethod(screen, "findPreference", "hotspot_adb_wireless_debugging") != null) return
-        val context = XposedHelpers.callMethod(screen, "getContext") as Context
+        if (Reflect.call(screen, "findPreference", "hotspot_adb_wireless_debugging") != null) return
+        val context = Reflect.call(screen, "getContext") as Context
 
         // PrimarySwitchPreference — split toggle+button, same as Developer Options
         val primarySwitchClass =
-            XposedHelpers.findClass(
-                "com.android.settingslib.PrimarySwitchPreference",
-                lpparam.classLoader,
-            )
+            classLoader.loadClass("com.android.settingslib.PrimarySwitchPreference")
         val pref = primarySwitchClass.getConstructor(Context::class.java).newInstance(context)
 
-        XposedHelpers.callMethod(pref, "setKey", "hotspot_adb_wireless_debugging")
-        XposedHelpers.callMethod(pref, "setTitle", "Wireless debugging")
+        Reflect.call(pref, "setKey", "hotspot_adb_wireless_debugging")
+        Reflect.call(pref, "setTitle", "Wireless debugging")
         updatePrefState(context, pref)
 
         // Switch toggle listener
         val changeListenerClass =
-            XposedHelpers.findClass(
-                "androidx.preference.Preference\$OnPreferenceChangeListener",
-                lpparam.classLoader,
-            )
+            classLoader.loadClass("androidx.preference.Preference\$OnPreferenceChangeListener")
         val changeProxy =
             java.lang.reflect.Proxy.newProxyInstance(
-                lpparam.classLoader,
+                classLoader,
                 arrayOf(changeListenerClass),
             ) { _, _, args ->
                 val newValue = args!![1] as Boolean
@@ -236,36 +205,33 @@ object SettingsHook {
                 updatePrefState(context, pref)
                 true
             }
-        XposedHelpers.callMethod(pref, "setOnPreferenceChangeListener", changeProxy)
+        Reflect.call(pref, "setOnPreferenceChangeListener", changeProxy)
 
         // Click on the left side opens Wireless Debugging screen
         val clickListenerClass =
-            XposedHelpers.findClass(
-                "androidx.preference.Preference\$OnPreferenceClickListener",
-                lpparam.classLoader,
-            )
+            classLoader.loadClass("androidx.preference.Preference\$OnPreferenceClickListener")
         val clickProxy =
             java.lang.reflect.Proxy.newProxyInstance(
-                lpparam.classLoader,
+                classLoader,
                 arrayOf(clickListenerClass),
             ) { _, _, _ ->
                 try {
-                    val subSettingsClass = XposedHelpers.findClass("com.android.settings.SubSettings", context.classLoader)
-                    val fragmentClass = SettingsAppRefs.resolveFragmentClassName(lpparam.classLoader)
+                    val subSettingsClass = context.classLoader.loadClass("com.android.settings.SubSettings")
+                    val fragmentClass = SettingsAppRefs.resolveFragmentClassName(classLoader)
                     val intent = android.content.Intent(context, subSettingsClass)
                     intent.putExtra(":settings:show_fragment", fragmentClass)
                     context.startActivity(intent)
                 } catch (e: Exception) {
-                    XposedBridge.log("HotspotAdb: failed to open wireless debugging: $e")
+                    Xp.log("HotspotAdb: failed to open wireless debugging: $e")
                 }
                 true
             }
-        XposedHelpers.callMethod(pref, "setOnPreferenceClickListener", clickProxy)
+        Reflect.call(pref, "setOnPreferenceClickListener", clickProxy)
 
-        XposedHelpers.callMethod(screen, "addPreference", pref)
+        Reflect.call(screen, "addPreference", pref)
 
         // Sync state from Developer Options; observer stored on the fragment for later cleanup
-        if (XposedHelpers.getAdditionalInstanceField(fragment, TAG_WTS_OBSERVER) == null) {
+        if (Reflect.getInstanceField(fragment, TAG_WTS_OBSERVER) == null) {
             val observer =
                 object : ContentObserver(Handler(Looper.getMainLooper())) {
                     override fun onChange(
@@ -282,11 +248,11 @@ object SettingsHook {
                 false,
                 observer,
             )
-            XposedHelpers.setAdditionalInstanceField(fragment, TAG_WTS_OBSERVER, observer)
+            Reflect.setInstanceField(fragment, TAG_WTS_OBSERVER, observer)
         }
 
         // Also watch hotspot state changes (on/off) to update the label
-        if (XposedHelpers.getAdditionalInstanceField(fragment, TAG_WTS_RECEIVER) == null) {
+        if (Reflect.getInstanceField(fragment, TAG_WTS_RECEIVER) == null) {
             val handler = Handler(Looper.getMainLooper())
             val updatePref = Runnable { updatePrefState(context, pref) }
             val receiver =
@@ -307,72 +273,64 @@ object SettingsHook {
                     addAction("android.net.wifi.WIFI_AP_STATE_CHANGED")
                 },
             )
-            XposedHelpers.setAdditionalInstanceField(fragment, TAG_WTS_RECEIVER, receiver)
+            Reflect.setInstanceField(fragment, TAG_WTS_RECEIVER, receiver)
         }
 
-        XposedBridge.log("HotspotAdb: added wireless debugging toggle to hotspot settings")
+        Xp.log("HotspotAdb: added wireless debugging toggle to hotspot settings")
     }
 
-    private fun hookWirelessDebuggingFragment(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookWirelessDebuggingFragment(classLoader: ClassLoader) {
         // The target fragment doesn't override onStart() directly, so hook DashboardFragment.onStart() and filter.
-        val fragmentClassName = SettingsAppRefs.resolveFragmentClassName(lpparam.classLoader)
+        val fragmentClassName = SettingsAppRefs.resolveFragmentClassName(classLoader)
         try {
-            XposedHelpers.findAndHookMethod(
-                "com.android.settings.dashboard.DashboardFragment",
-                lpparam.classLoader,
-                "onStart",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        if (param.thisObject.javaClass.name != fragmentClassName) return
-                        try {
-                            injectFixedEndpointPref(param.thisObject, lpparam)
-                        } catch (e: Throwable) {
-                            XposedBridge.log("HotspotAdb: failed to inject fixed endpoint pref: $e")
-                        }
+            val dashboard = classLoader.loadClass("com.android.settings.dashboard.DashboardFragment")
+            val method = Reflect.findMethod(dashboard, "onStart")
+            Xp.hook(method).intercept { chain ->
+                val result = chain.proceed()
+                val self = chain.thisObject
+                if (self != null && self.javaClass.name == fragmentClassName) {
+                    try {
+                        injectFixedEndpointPref(self, classLoader)
+                    } catch (e: Throwable) {
+                        Xp.log("HotspotAdb: failed to inject fixed endpoint pref: $e")
                     }
-                },
-            )
+                }
+                result
+            }
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: failed to hook DashboardFragment.onStart for $fragmentClassName: $e")
+            Xp.log("HotspotAdb: failed to hook DashboardFragment.onStart for $fragmentClassName: $e")
         }
     }
 
     private fun injectFixedEndpointPref(
         fragment: Any,
-        lpparam: XC_LoadPackage.LoadPackageParam,
+        classLoader: ClassLoader,
     ) {
         val screen =
-            XposedHelpers.callMethod(fragment, "getPreferenceScreen") ?: run {
-                XposedBridge.log("HotspotAdb: WD preferenceScreen is null")
+            Reflect.call(fragment, "getPreferenceScreen") ?: run {
+                Xp.log("HotspotAdb: WD preferenceScreen is null")
                 return
             }
-        if (XposedHelpers.callMethod(screen, "findPreference", HotspotHelper.FIXED_ENDPOINT_KEY) != null) return
-        val context = XposedHelpers.callMethod(screen, "getContext") as Context
+        if (Reflect.call(screen, "findPreference", HotspotHelper.FIXED_ENDPOINT_KEY) != null) return
+        val context = Reflect.call(screen, "getContext") as Context
 
-        val switchClass =
-            XposedHelpers.findClass(
-                "androidx.preference.SwitchPreferenceCompat",
-                lpparam.classLoader,
-            )
+        val switchClass = classLoader.loadClass("androidx.preference.SwitchPreferenceCompat")
         val pref = switchClass.getConstructor(Context::class.java).newInstance(context)
-        XposedHelpers.callMethod(pref, "setKey", HotspotHelper.FIXED_ENDPOINT_KEY)
-        XposedHelpers.callMethod(pref, "setTitle", "Fixed IP/port")
-        XposedHelpers.callMethod(
+        Reflect.call(pref, "setKey", HotspotHelper.FIXED_ENDPOINT_KEY)
+        Reflect.call(pref, "setTitle", "Fixed IP/port")
+        Reflect.call(
             pref,
             "setSummary",
             "Use ${HotspotHelper.FIXED_IP}:${HotspotHelper.FIXED_PORT}",
         )
-        XposedHelpers.callMethod(pref, "setChecked", HotspotHelper.isFixedEndpointEnabled(context))
-        XposedHelpers.callMethod(pref, "setVisible", HotspotHelper.isAdbWifiEnabled(context))
+        Reflect.call(pref, "setChecked", HotspotHelper.isFixedEndpointEnabled(context))
+        Reflect.call(pref, "setVisible", HotspotHelper.isAdbWifiEnabled(context))
 
         val changeListenerClass =
-            XposedHelpers.findClass(
-                "androidx.preference.Preference\$OnPreferenceChangeListener",
-                lpparam.classLoader,
-            )
+            classLoader.loadClass("androidx.preference.Preference\$OnPreferenceChangeListener")
         val changeProxy =
             java.lang.reflect.Proxy.newProxyInstance(
-                lpparam.classLoader,
+                classLoader,
                 arrayOf(changeListenerClass),
             ) { _, _, args ->
                 val newValue = args!![1] as Boolean
@@ -383,43 +341,43 @@ object SettingsHook {
                 )
                 // Refresh the IP/Port row above so it re-reads our getIpv4Address hook.
                 try {
-                    XposedHelpers.callMethod(fragment, "updatePreferenceStates")
+                    Reflect.call(fragment, "updatePreferenceStates")
                 } catch (e: Throwable) {
-                    XposedBridge.log("HotspotAdb: updatePreferenceStates failed: $e")
+                    Xp.log("HotspotAdb: updatePreferenceStates failed: $e")
                 }
                 true
             }
-        XposedHelpers.callMethod(pref, "setOnPreferenceChangeListener", changeProxy)
+        Reflect.call(pref, "setOnPreferenceChangeListener", changeProxy)
 
         // Place the toggle right after the IP/Port row. Resolve by the "adb_ip_addr_pref"
         // key (present A11–A14, A16) when possible, else default to index 0 (A15, which
         // reorganized the fragment and left the IP row keyless).
-        val count = XposedHelpers.callMethod(screen, "getPreferenceCount") as Int
+        val count = Reflect.call(screen, "getPreferenceCount") as Int
         var targetIndex = 0
         for (i in 0 until count) {
-            val p = XposedHelpers.callMethod(screen, "getPreference", i)
-            if (XposedHelpers.callMethod(p, "getKey") as? String == SettingsAppRefs.IP_PREF_KEY) {
+            val p = Reflect.call(screen, "getPreference", i)!!
+            if (Reflect.call(p, "getKey") as? String == SettingsAppRefs.IP_PREF_KEY) {
                 targetIndex = i
                 break
             }
         }
         for (i in 0 until count) {
-            val p = XposedHelpers.callMethod(screen, "getPreference", i)
+            val p = Reflect.call(screen, "getPreference", i)!!
             val newOrder = if (i <= targetIndex) i else i + 1
-            XposedHelpers.callMethod(p, "setOrder", newOrder)
+            Reflect.call(p, "setOrder", newOrder)
         }
-        XposedHelpers.callMethod(pref, "setOrder", targetIndex + 1)
-        XposedHelpers.callMethod(screen, "addPreference", pref)
+        Reflect.call(pref, "setOrder", targetIndex + 1)
+        Reflect.call(screen, "addPreference", pref)
 
         // Toggle visibility with the main Wireless Debugging switch on this screen.
-        if (XposedHelpers.getAdditionalInstanceField(fragment, TAG_WD_OBSERVER) == null) {
+        if (Reflect.getInstanceField(fragment, TAG_WD_OBSERVER) == null) {
             val observer =
                 object : ContentObserver(Handler(Looper.getMainLooper())) {
                     override fun onChange(
                         selfChange: Boolean,
                         uri: Uri?,
                     ) {
-                        XposedHelpers.callMethod(pref, "setVisible", HotspotHelper.isAdbWifiEnabled(context))
+                        Reflect.call(pref, "setVisible", HotspotHelper.isAdbWifiEnabled(context))
                     }
                 }
             context.contentResolver.registerContentObserver(
@@ -427,9 +385,9 @@ object SettingsHook {
                 false,
                 observer,
             )
-            XposedHelpers.setAdditionalInstanceField(fragment, TAG_WD_OBSERVER, observer)
+            Reflect.setInstanceField(fragment, TAG_WD_OBSERVER, observer)
         }
-        XposedBridge.log("HotspotAdb: added Fixed IP/port toggle to Wireless Debugging")
+        Xp.log("HotspotAdb: added Fixed IP/port toggle to Wireless Debugging")
     }
 
     private fun updatePrefState(
@@ -437,8 +395,8 @@ object SettingsHook {
         pref: Any,
     ) {
         val on = HotspotHelper.isAdbWifiEnabled(context) && HotspotHelper.isHotspotActive(context)
-        XposedHelpers.callMethod(pref, "setChecked", on)
-        XposedHelpers.callMethod(pref, "setSummary", getWirelessDebuggingSummary(context, on))
+        Reflect.call(pref, "setChecked", on)
+        Reflect.call(pref, "setSummary", getWirelessDebuggingSummary(context, on))
     }
 
     private fun getWirelessDebuggingSummary(

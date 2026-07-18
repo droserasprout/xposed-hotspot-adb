@@ -1,7 +1,7 @@
 package io.drsr.hotspotadb.compat
 
 import android.os.IBinder
-import de.robv.android.xposed.XposedBridge
+import io.drsr.hotspotadb.Xp
 
 /**
  * INetd access. AOSP moved connectivity services into the Tethering/Connectivity
@@ -35,12 +35,12 @@ object NetdCompat {
                     ?: return null
             val stub =
                 ClassRefs.tryFindClass(loader, *CANDIDATE_STUB_NAMES) ?: run {
-                    XposedBridge.log("HotspotAdb: INetd\$Stub not found on framework classloader")
+                    Xp.log("HotspotAdb: INetd\$Stub not found on framework classloader")
                     return null
                 }
             stub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
         } catch (e: Throwable) {
-            XposedBridge.log("HotspotAdb: getNetd failed: $e")
+            Xp.log("HotspotAdb: getNetd failed: $e")
             null
         }
     }
