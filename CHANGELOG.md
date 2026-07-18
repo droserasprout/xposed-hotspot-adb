@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-17
+
 ### Changed
 
 - Migrated from the legacy Xposed API (82) to libxposed API (101).
 
-No other changes.
+### Fixed
+
+- Declare the framework scope as `system` so LSPosed recommends System Framework for the module.
 
 ## [1.2.0] - 2026-07-10
 
@@ -50,6 +54,7 @@ No other changes.
 
 Initial release.
 
+[1.3.0]: https://github.com/droserasprout/io.drsr.hotspotadb/compare/1.2.0...1.3.0
 [1.2.0]: https://github.com/droserasprout/io.drsr.hotspotadb/compare/1.1.0...1.2.0
 [1.1.0]: https://github.com/droserasprout/io.drsr.hotspotadb/compare/1.0.2...1.1.0
 [1.0.2]: https://github.com/droserasprout/io.drsr.hotspotadb/compare/1.0.1...1.0.2

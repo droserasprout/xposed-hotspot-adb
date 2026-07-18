@@ -30,7 +30,7 @@ Grab the APK from Xposed Module Repo, [GitHub Releases](https://github.com/drose
 1. Install the APK
 2. Enable the module in LSPosed for two scopes:
    - `com.android.settings`
-   - `android` (System Framework)
+   - `system` (System Framework)
 3. Reboot
 
 ## Usage
